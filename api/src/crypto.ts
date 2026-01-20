@@ -1,4 +1,9 @@
-import { randomBytes, createHash, createCipheriv, createDecipheriv } from "node:crypto";
+import {
+  randomBytes,
+  createHash,
+  createCipheriv,
+  createDecipheriv
+} from "node:crypto";
 import { keccak256, toHex } from "viem";
 import { deriveBytes32 } from "./keys.js";
 
@@ -7,7 +12,7 @@ export function newUid(): string {
 }
 
 export function uidHash(uid: string): `0x${string}` {
-  return keccak256(toHex(uid));
+  return keccak256(toHex(uid)) as `0x${string}`;
 }
 
 export function sha256HexBytes(buf: Buffer): `0x${string}` {
@@ -24,11 +29,15 @@ export type BackupFile = {
 
 async function backupKey(uid: string): Promise<Buffer> {
   const master = await deriveBytes32("pawpad:master:backup:v1");
-  return createHash("sha256").update(Buffer.concat([master, Buffer.from(uid, "utf8")])).digest();
+  const key = createHash("sha256")
+    .update(Buffer.concat([master, Buffer.from(uid, "utf8")]))
+    .digest();
+  return key; // 32 bytes
 }
 
 export async function createBackup(uid: string): Promise<{ backup: BackupFile; backupHash: `0x${string}` }> {
-  const pt = Buffer.from(JSON.stringify({ v: 1, uid, created_at: Math.floor(Date.now() / 1000) }), "utf8");
+  const payload = { v: 1, uid, created_at: Math.floor(Date.now() / 1000) };
+  const pt = Buffer.from(JSON.stringify(payload), "utf8");
 
   const key = await backupKey(uid);
   const nonce = randomBytes(12);
@@ -45,20 +54,22 @@ export async function createBackup(uid: string): Promise<{ backup: BackupFile; b
   };
 
   const raw = Buffer.from(JSON.stringify(backup), "utf8");
-  return { backup, backupHash: sha256HexBytes(raw) };
+  const backupHash = sha256HexBytes(raw);
+
+  return { backup, backupHash };
 }
 
-export async function decryptBackup(backup: BackupFile): Promise<{ uid: string }> {
+export async function decryptBackup(backup: BackupFile): Promise<any> {
+  if (backup.v !== 1) throw new Error("bad backup version");
   const key = await backupKey(backup.uid);
+
   const nonce = Buffer.from(backup.nonce_b64, "base64url");
   const ct = Buffer.from(backup.ct_b64, "base64url");
   const tag = Buffer.from(backup.tag_b64, "base64url");
 
   const dec = createDecipheriv("aes-256-gcm", key, nonce);
   dec.setAuthTag(tag);
-  const pt = Buffer.concat([dec.update(ct), dec.final()]);
-  const obj = JSON.parse(pt.toString("utf8"));
-  if (obj.uid !== backup.uid) throw new Error("uid mismatch");
-  return { uid: obj.uid };
-}
 
+  const pt = Buffer.concat([dec.update(ct), dec.final()]);
+  return JSON.parse(pt.toString("utf8"));
+}

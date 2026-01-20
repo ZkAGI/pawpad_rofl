@@ -1,44 +1,26 @@
-import { encodeFunctionData, keccak256, toHex } from "viem";
+import { encodeFunctionData } from "viem";
 import { CFG } from "./config.js";
-import { roflSignSubmitEthTx } from "./rofl.js";
+import { roflTxSignSubmitEth } from "./rofl.js";
+import { uidHash } from "./crypto.js";
+import { keccak256, toHex } from "viem";
 
-const PolicyAbi = [
+export const PolicyAbi = [
   {
     type: "function",
     name: "registerUser",
     stateMutability: "nonpayable",
     inputs: [
       { name: "uidHash", type: "bytes32" },
-      { name: "evmAddress", type: "address" },
-      { name: "solanaPubkey", type: "bytes32" },
-      { name: "totpSecretHash", type: "bytes32" },
-      { name: "backupBlobHash", type: "bytes32" }
-    ],
-    outputs: []
-  },
-  {
-    type: "function",
-    name: "startRecovery",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "uidHash", type: "bytes32" },
-      { name: "timelockSeconds", type: "uint64" }
-    ],
-    outputs: []
-  },
-  {
-    type: "function",
-    name: "completeRecovery",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "uidHash", type: "bytes32" },
-      { name: "newTotpSecretHash", type: "bytes32" }
+      { name: "totpHash", type: "bytes32" },
+      { name: "backupHash", type: "bytes32" },
+      { name: "solPubkey", type: "bytes32" },
+      { name: "dailyLimit", type: "uint256" }
     ],
     outputs: []
   }
 ] as const;
 
-const AuditAbi = [
+export const AuditAbi = [
   {
     type: "function",
     name: "recordExecution",
@@ -53,55 +35,41 @@ const AuditAbi = [
   }
 ] as const;
 
-function totpSecretHash(secret: string): `0x${string}` {
-  return keccak256(toHex(secret));
+export function totpHash(secret: string): `0x${string}` {
+  return keccak256(toHex(secret)) as `0x${string}`;
 }
 
 export async function policyRegisterUser(args: {
-  uidHash: `0x${string}`;
-  evmAddress: `0x${string}`;
-  solanaPubkey32: `0x${string}`;
+  uid: string;
   totpSecret: string;
   backupHash: `0x${string}`;
-}) {
-  if (!CFG.policyContract || CFG.policyContract === "0x0000000000000000000000000000000000000000") {
-    return { skipped: true };
-  }
+  solPubkey32Hex: string; // 64 hex chars
+}): Promise<{ tx_hash: string } | null> {
+  if (!CFG.policyContract) return null;
+
+  // In local mock mode, skip chain calls unless explicitly enabled.
+  if (CFG.mockRofl && !CFG.enableChainCallsInMock) return null;
+
+  const solBytes32 = (`0x${args.solPubkey32Hex}` as `0x${string}`);
+
   const data = encodeFunctionData({
     abi: PolicyAbi,
     functionName: "registerUser",
-    args: [args.uidHash, args.evmAddress, args.solanaPubkey32, totpSecretHash(args.totpSecret), args.backupHash]
+    args: [uidHash(args.uid), totpHash(args.totpSecret), args.backupHash, solBytes32, 0n]
   });
-  return await roflSignSubmitEthTx(CFG.policyContract, data);
+
+  return await roflTxSignSubmitEth({ to: CFG.policyContract, data });
 }
 
-export async function policyStartRecovery(uidHash: `0x${string}`) {
-  const data = encodeFunctionData({
-    abi: PolicyAbi,
-    functionName: "startRecovery",
-    args: [uidHash, BigInt(CFG.recoveryTimelockSeconds) as any]
-  });
-  return await roflSignSubmitEthTx(CFG.policyContract, data);
-}
+export async function audit(action: string, uid: string, execHash: `0x${string}`, meta = ""): Promise<void> {
+  if (!CFG.auditContract) return;
+  if (CFG.mockRofl && !CFG.enableChainCallsInMock) return;
 
-export async function policyCompleteRecovery(uidHash: `0x${string}`, newTotpSecret: string) {
-  const data = encodeFunctionData({
-    abi: PolicyAbi,
-    functionName: "completeRecovery",
-    args: [uidHash, totpSecretHash(newTotpSecret)]
-  });
-  return await roflSignSubmitEthTx(CFG.policyContract, data);
-}
-
-export async function audit(uidHash: `0x${string}`, action: string, execHash: `0x${string}`, meta: string) {
-  if (!CFG.auditContract || CFG.auditContract === "0x0000000000000000000000000000000000000000") {
-    return { skipped: true };
-  }
   const data = encodeFunctionData({
     abi: AuditAbi,
     functionName: "recordExecution",
-    args: [uidHash, action, execHash, meta]
+    args: [uidHash(uid), action, execHash, meta]
   });
-  return await roflSignSubmitEthTx(CFG.auditContract, data);
-}
 
+  await roflTxSignSubmitEth({ to: CFG.auditContract, data });
+}

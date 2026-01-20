@@ -1,18 +1,20 @@
 import { privateKeyToAccount } from "viem/accounts";
 import { Keypair } from "@solana/web3.js";
-import { deriveEvmPrivKey, deriveSolanaSeed32 } from "./keys.js";
+import { evmPrivKey, solanaSeed32 } from "./keys.js";
 
-export async function deriveWallets(uid: string) {
-  const evmPk = await deriveEvmPrivKey(uid);
-  const evm = privateKeyToAccount(evmPk);
+export async function walletsFor(uid: string): Promise<{
+  evm: { chain: "sapphire-testnet"; address: `0x${string}` };
+  solana: { address: string; pubkey32hex: string };
+}> {
+  const pk = await evmPrivKey(uid);
+  const evm = privateKeyToAccount(pk);
 
-  const sol = Keypair.fromSeed(await deriveSolanaSeed32(uid));
-  const solPub32Hex = Buffer.from(sol.publicKey.toBytes()).toString("hex");
+  const seed32 = await solanaSeed32(uid);
+  const sol = Keypair.fromSeed(seed32);
+  const pub32hex = Buffer.from(sol.publicKey.toBytes()).toString("hex");
 
   return {
-    evmAddress: evm.address as `0x${string}`,
-    solanaAddress: sol.publicKey.toBase58(),
-    solanaPubkey32: (`0x${solPub32Hex}` as `0x${string}`)
+    evm: { chain: "sapphire-testnet", address: evm.address },
+    solana: { address: sol.publicKey.toBase58(), pubkey32hex: pub32hex }
   };
 }
-

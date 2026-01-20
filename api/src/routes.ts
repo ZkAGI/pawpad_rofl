@@ -1,128 +1,108 @@
 import { Router } from "express";
 import { z } from "zod";
+import { newUid, createBackup, decryptBackup } from "./crypto.js";
+import { walletsFor } from "./wallets.js";
+import { newTotpSecret, otpauthUri, checkTotp, issueJwt, requireJwt } from "./auth.js";
+import { policyRegisterUser } from "./sapphire.js";
 
-import { newUid, uidHash, createBackup, decryptBackup, BackupFile } from "./crypto.js";
-import { newTotpSecret, otpauthUri, verifyTotp, issueJwt, requireJwt } from "./auth.js";
-import { deriveWallets } from "./wallets.js";
-import { policyRegisterUser, policyStartRecovery, policyCompleteRecovery, audit } from "./sapphire.js";
+type MemUser = {
+  uid: string;
+  totpSecret: string;
+  totpConfirmed: boolean;
+};
+
+const mem = new Map<string, MemUser>();
 
 export const routes = Router();
 
-// Health
 routes.get("/health", (_req, res) => res.json({ ok: true }));
 
 /**
  * POST /v1/connect
- * Creates uid + derives EVM+Solana keys inside ROFL + registers commitments on-chain.
+ * - Creates uid
+ * - Derives EVM + Solana wallets
+ * - Generates TOTP secret + otpauth uri
+ * - Creates encrypted backup file
+ * - Registers commitments on Sapphire (ROFL mode)
  */
 routes.post("/v1/connect", async (req, res) => {
-  z.object({}).parse(req.body || {});
+  z.object({}).parse(req.body ?? {});
+
   const uid = newUid();
-  const uidH = uidHash(uid);
-
   const totpSecret = newTotpSecret();
-  const otpUri = otpauthUri(uid, totpSecret);
+  const totpUri = otpauthUri(uid, totpSecret);
 
-  const w = await deriveWallets(uid);
+  const wallets = await walletsFor(uid);
   const { backup, backupHash } = await createBackup(uid);
 
-  const onchain = await policyRegisterUser({
-    uidHash: uidH,
-    evmAddress: w.evmAddress,
-    solanaPubkey32: w.solanaPubkey32,
-    totpSecret,
-    backupHash
-  });
+  // store in-memory (replace with DB later)
+  mem.set(uid, { uid, totpSecret, totpConfirmed: false });
 
-  await audit(uidH, "connect", uidH, `evm=${w.evmAddress} sol=${w.solanaAddress}`);
+  // call contract (skipped in MOCK unless enabled)
+  await policyRegisterUser({
+    uid,
+    totpSecret,
+    backupHash,
+    solPubkey32Hex: wallets.solana.pubkey32hex
+  });
 
   res.json({
     uid,
-    uid_hash: uidH,
-    wallets: {
-      evm: { address: w.evmAddress },
-      solana: { address: w.solanaAddress }
-    },
-    totp: { otpauth_uri: otpUri, secret: totpSecret }, // ✅ for now; remove later when you store inside ROFL
-    backup_file: backup,
-    onchain
+    wallets,
+    totp: { otpauth_uri: totpUri },
+    backup_file: backup
   });
+});
+
+/**
+ * POST /v1/totp/confirm
+ * { uid, code }
+ */
+routes.post("/v1/totp/confirm", async (req, res) => {
+  const body = z.object({ uid: z.string().min(8), code: z.string().min(6).max(8) }).parse(req.body);
+
+  const u = mem.get(body.uid);
+  if (!u) return res.status(404).json({ error: "unknown uid" });
+
+  if (!checkTotp(body.code, u.totpSecret)) return res.status(401).json({ error: "bad code" });
+  u.totpConfirmed = true;
+
+  res.json({ ok: true });
 });
 
 /**
  * POST /v1/login
- * Minimal login = backup_file + totp secret + code -> JWT
- * (Next upgrade: store totp secret inside ROFL and remove `totp_secret` from request)
+ * { uid, code }
  */
 routes.post("/v1/login", async (req, res) => {
-  const body = z
-    .object({
-      backup_file: z.any(),
-      totp_secret: z.string().min(10),
-      code: z.string().min(6).max(8)
-    })
-    .parse(req.body);
+  const body = z.object({ uid: z.string().min(8), code: z.string().min(6).max(8) }).parse(req.body);
 
-  const { uid } = await decryptBackup(body.backup_file as BackupFile);
-  if (!verifyTotp(body.code, body.totp_secret)) return res.status(401).json({ error: "bad totp" });
+  const u = mem.get(body.uid);
+  if (!u) return res.status(404).json({ error: "unknown uid" });
+  if (!u.totpConfirmed) return res.status(403).json({ error: "totp not confirmed" });
+  if (!checkTotp(body.code, u.totpSecret)) return res.status(401).json({ error: "bad code" });
 
-  const token = await issueJwt(uid);
-  res.json({ token, uid });
+  const token = await issueJwt(u.uid);
+  res.json({ token });
 });
 
 /**
  * GET /v1/wallets
- * Auth: Bearer JWT
+ * Authorization: Bearer <jwt>
  */
 routes.get("/v1/wallets", async (req, res) => {
   const uid = await requireJwt(req.headers.authorization);
-  const w = await deriveWallets(uid);
-  res.json({
-    uid,
-    wallets: {
-      evm: { address: w.evmAddress },
-      solana: { address: w.solanaAddress }
-    }
-  });
+  const wallets = await walletsFor(uid);
+  res.json({ uid, wallets });
 });
 
 /**
- * Recovery start: freezes user on-chain (timelock)
+ * POST /v1/recovery/preview
+ * Just validates backup file decrypts to uid
+ * { backup_file }
  */
-routes.post("/v1/recovery/start", async (req, res) => {
-  const body = z
-    .object({ backup_file: z.any(), totp_secret: z.string().min(10), code: z.string().min(6).max(8) })
-    .parse(req.body);
-
-  const { uid } = await decryptBackup(body.backup_file as BackupFile);
-  if (!verifyTotp(body.code, body.totp_secret)) return res.status(401).json({ error: "bad totp" });
-
-  const uidH = uidHash(uid);
-  const onchain = await policyStartRecovery(uidH);
-  await audit(uidH, "recovery_start", uidH, "freeze+timelock");
-
-  res.json({ ok: true, uid, uid_hash: uidH, onchain });
+routes.post("/v1/recovery/preview", async (req, res) => {
+  const body = z.object({ backup_file: z.any() }).parse(req.body);
+  const payload = await decryptBackup(body.backup_file);
+  res.json({ ok: true, payload });
 });
-
-/**
- * Recovery complete: rotates TOTP on-chain (timelock must have passed)
- */
-routes.post("/v1/recovery/complete", async (req, res) => {
-  const body = z
-    .object({ backup_file: z.any(), old_totp_secret: z.string().min(10), code: z.string().min(6).max(8) })
-    .parse(req.body);
-
-  const { uid } = await decryptBackup(body.backup_file as BackupFile);
-  if (!verifyTotp(body.code, body.old_totp_secret)) return res.status(401).json({ error: "bad totp" });
-
-  const uidH = uidHash(uid);
-
-  const newSecret = newTotpSecret();
-  const uri = otpauthUri(uid, newSecret);
-
-  const onchain = await policyCompleteRecovery(uidH, newSecret);
-  await audit(uidH, "recovery_complete", uidH, "rotate_totp_unfreeze");
-
-  res.json({ ok: true, uid, uid_hash: uidH, new_totp: { otpauth_uri: uri, secret: newSecret }, onchain });
-});
-
