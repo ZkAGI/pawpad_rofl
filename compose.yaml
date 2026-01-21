@@ -1,14 +1,16 @@
 services:
-  mycontainer:
-    build: .
-    image: "docker.io/org_name/image_name"      # Always provide FQDN image names!
-    platform: linux/amd64
-    volumes:
-      - my-volume:/root/.my-volume              # Persistent per-machine storage.
-      - /run/rofl-appd.sock:/run/rofl-appd.sock # appd REST API.
+  api:
+    image: docker.io/zkagi/pawpad-rofl-api:0.1.0
+    ports:
+      - "8080:8080"
     environment:
-      - MY_SECRET_1=${MY_SECRET_1}              # See `oasis rofl secret` command.
-      - MY_SECRET_2=${MY_SECRET_2}
-
-volumes:
-  my-volume:
+      - PORT=8080
+      - MOCK_ROFL=0
+      - ROFL_APPD_SOCKET=/run/rofl-appd.sock
+      - ROFL_APP_ID_BYTES21=0x00144c1d069741f49d1dfeffd52afb3b8e07447c60
+      - SAPPHIRE_RPC_URL=https://testnet.sapphire.oasis.io
+      - SAPPHIRE_CHAIN_ID=23295
+      - POLICY_CONTRACT=0x418f18f69eFd9ca9786997D6495CCae792d03466
+      - AUDIT_CONTRACT=0xE2F96db6a0011Af2BE129bedF2354b6bDeCD8704
+    volumes:
+      - /run/rofl-appd.sock:/run/rofl-appd.sock

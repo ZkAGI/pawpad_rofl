@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.20;
 
-import {Subcall} from "@oasisprotocol/sapphire-contracts/contracts/Subcall.sol";
-
 /**
- * PawPadPolicy
+ * PawPadPolicy (Trusted Signer Version)
  * - Stores per-user commitments + wallet identities.
- * - All privileged writes must come from the ROFL app identity inside TEE.
+ * - All privileged writes must come from the trusted signer address
+ *   (derived deterministically inside ROFL TEE from a fixed key_id).
  * - uidHash is keccak256(uid_string_bytes) computed by backend.
+ * 
+ * Security: The trusted signer's private key never leaves the TEE.
+ *           It's derived deterministically from the ROFL App ID + key_id.
  */
 contract PawPadPolicy {
-    bytes21 public immutable APP_ID;
+    // The trusted signer address (ROFL-derived wallet)
+    address public immutable trustedSigner;
 
     struct User {
         // Wallet identities
@@ -19,7 +22,7 @@ contract PawPadPolicy {
 
         // Auth / backup commitments
         bytes32 totpSecretHash;  // keccak256(totp_secret)
-        bytes32 backupBlobHash;  // sha256/keccak256 of encrypted backup JSON bytes (backend chooses)
+        bytes32 backupBlobHash;  // sha256/keccak256 of encrypted backup JSON bytes
 
         // Recovery + safety
         uint64  recoveryPendingUntil; // unix timestamp; 0 when inactive
@@ -34,13 +37,13 @@ contract PawPadPolicy {
     event RecoveryStarted(bytes32 indexed uidHash, uint64 until);
     event RecoveryCompleted(bytes32 indexed uidHash);
 
-    constructor(bytes21 appId) {
-        APP_ID = appId;
+    constructor(address _trustedSigner) {
+        require(_trustedSigner != address(0), "invalid signer");
+        trustedSigner = _trustedSigner;
     }
 
-    modifier onlyRofl() {
-        // Reverts unless tx origin is your ROFL application identity.
-        Subcall.roflEnsureAuthorizedOrigin(APP_ID);
+    modifier onlyTrusted() {
+        require(msg.sender == trustedSigner, "not authorized");
         _;
     }
 
@@ -55,7 +58,7 @@ contract PawPadPolicy {
         bytes32 solanaPubkey,
         bytes32 totpSecretHash,
         bytes32 backupBlobHash
-    ) external onlyRofl {
+    ) external onlyTrusted {
         User storage u = users[uidHash];
         require(u.evmAddress == address(0), "already registered");
         require(evmAddress != address(0), "bad evm address");
@@ -77,7 +80,7 @@ contract PawPadPolicy {
         bytes32 uidHash,
         bytes32 newTotpSecretHash,
         bytes32 newBackupBlobHash
-    ) external onlyRofl {
+    ) external onlyTrusted {
         User storage u = users[uidHash];
         require(u.evmAddress != address(0), "unknown user");
         require(!u.frozen, "frozen");
@@ -87,7 +90,7 @@ contract PawPadPolicy {
     }
 
     /// Emergency freeze/unfreeze (e.g., user reports device lost).
-    function setFreeze(bytes32 uidHash, bool frozen) external onlyRofl {
+    function setFreeze(bytes32 uidHash, bool frozen) external onlyTrusted {
         User storage u = users[uidHash];
         require(u.evmAddress != address(0), "unknown user");
         u.frozen = frozen;
@@ -95,7 +98,7 @@ contract PawPadPolicy {
     }
 
     /// Start recovery: freeze + timelock
-    function startRecovery(bytes32 uidHash, uint64 timelockSeconds) external onlyRofl {
+    function startRecovery(bytes32 uidHash, uint64 timelockSeconds) external onlyTrusted {
         User storage u = users[uidHash];
         require(u.evmAddress != address(0), "unknown user");
         require(u.recoveryPendingUntil == 0, "already recovering");
@@ -109,7 +112,7 @@ contract PawPadPolicy {
     }
 
     /// Complete recovery: rotate TOTP commitment (and optionally unfreeze)
-    function completeRecovery(bytes32 uidHash, bytes32 newTotpSecretHash) external onlyRofl {
+    function completeRecovery(bytes32 uidHash, bytes32 newTotpSecretHash) external onlyTrusted {
         User storage u = users[uidHash];
         require(u.evmAddress != address(0), "unknown user");
         require(u.recoveryPendingUntil != 0, "no recovery");
@@ -124,7 +127,7 @@ contract PawPadPolicy {
     }
 
     /// Future-proof: allow wallet rotation if you ever want to re-key.
-    function rotateWallets(bytes32 uidHash, address newEvmAddress, bytes32 newSolanaPubkey) external onlyRofl {
+    function rotateWallets(bytes32 uidHash, address newEvmAddress, bytes32 newSolanaPubkey) external onlyTrusted {
         User storage u = users[uidHash];
         require(u.evmAddress != address(0), "unknown user");
         require(!u.frozen, "frozen");
