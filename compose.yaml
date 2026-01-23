@@ -6,6 +6,7 @@ services:
     environment:
       - PORT=8080
       - MOCK_ROFL=0
+      - MONGO_URI=mongodb://mongo:27017/pawpad_rofl
       - ROFL_APPD_SOCKET=/run/rofl-appd.sock
       - ROFL_APP_ID_BYTES21=0x00144c1d069741f49d1dfeffd52afb3b8e07447c60
       - SAPPHIRE_RPC_URL=https://testnet.sapphire.oasis.io
@@ -14,3 +15,15 @@ services:
       - AUDIT_CONTRACT=0xE2F96db6a0011Af2BE129bedF2354b6bDeCD8704
     volumes:
       - /run/rofl-appd.sock:/run/rofl-appd.sock
+    depends_on:
+      - mongo
+
+  mongo:
+    image: mongo:6.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+volumes:
+  mongo_data:
