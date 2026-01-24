@@ -105,11 +105,13 @@ Update `.env` with the deployed contract addresses.
 | `POST` | `/v1/connect` | Create new wallet (registration) |
 | `POST` | `/v1/login` | Authenticate with TOTP code |
 | `GET` | `/v1/wallets` | Get wallet addresses (requires auth) |
+| `POST` | `/v1/wallets/withdraw` | Withdraw funds to external address |
 | `POST` | `/v1/trade/config` | Configure trading parameters |
 | `GET` | `/v1/trade/history` | View executed trades |
 | `POST` | `/v1/recovery/rotate` | Recover account with backup file |
 
 ---
+
 
 ## Smart Contracts
 

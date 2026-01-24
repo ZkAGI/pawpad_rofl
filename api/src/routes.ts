@@ -119,6 +119,7 @@ import { getWallets } from "./wallets.js";
 import { registerUserOnSapphire, getRoflSignerAddress, getRoflSignerBalance, sapphireUpdateCommitments } from "./sapphire.js";
 import { roflStatus } from "./rofl_guard.js";
 import { UserConfig, TradeHistory } from "./database.js";
+import { executeWithdraw } from "./withdraw.js";
 
 const router = Router();
 
@@ -327,6 +328,66 @@ router.get(
     const uid = await requireSession(req.headers.authorization);
     const history = await TradeHistory.find({ uid }).sort({ timestamp: -1 }).limit(50);
     res.json({ ok: true, history });
+  })
+);
+
+
+/**
+ * POST /v1/wallets/withdraw
+ * Withdraw funds from PawPad wallet to external address
+ * Requires authentication. All signing happens inside TEE.
+ */
+router.post(
+  "/v1/wallets/withdraw",
+  asyncHandler(async (req, res) => {
+    const uid = await requireSession(req.headers.authorization);
+
+    // Validate request body
+    const body = z.object({
+      chain: z.enum(["base", "solana"]),
+      token: z.enum(["native", "usdc"]),
+      toAddress: z.string().min(1),
+      amount: z.string().regex(/^\d+(\.\d+)?$/, "Amount must be a valid number")
+    }).parse(req.body);
+
+    // Validate amount is positive
+    const amountNum = parseFloat(body.amount);
+    if (amountNum <= 0) {
+      res.status(400).json({ ok: false, error: "Amount must be greater than 0" });
+      return;
+    }
+
+    // Execute withdrawal inside TEE
+    const result = await executeWithdraw({
+      uid,
+      chain: body.chain,
+      token: body.token,
+      toAddress: body.toAddress,
+      amount: body.amount
+    });
+
+    if (!result.ok) {
+      res.status(400).json({ ok: false, error: result.error });
+      return;
+    }
+
+    // Log withdrawal to trade history
+    await TradeHistory.create({
+      uid,
+      timestamp: new Date(),
+      chain: body.chain,
+      asset: body.token === "native" ? (body.chain === "base" ? "ETH" : "SOL") : "USDC",
+      action: "WITHDRAW",
+      amount: body.amount,
+      txHash: result.txHash,
+      meta: { toAddress: body.toAddress, gasUsed: result.gasUsed }
+    });
+
+    res.json({
+      ok: true,
+      txHash: result.txHash,
+      message: `Successfully withdrew ${body.amount} ${body.token} to ${body.toAddress}`
+    });
   })
 );
 

@@ -13,7 +13,8 @@ This document provides a detailed breakdown of the PawPad system architecture, d
 5. [Flow 3: Wallet Address Retrieval](#flow-3-wallet-address-retrieval)
 6. [Flow 4: Automated Trading](#flow-4-automated-trading)
 7. [Flow 5: Account Recovery](#flow-5-account-recovery)
-8. [Security Architecture](#security-architecture)
+8. [Flow 6: Fund Withdrawal](#flow-6-fund-withdrawal)
+9. [Security Architecture](#security-architecture)
 
 ---
 
@@ -339,6 +340,85 @@ This document provides a detailed breakdown of the PawPad system architecture, d
 2. TEE decrypts to verify ownership
 3. New TOTP secret generated and committed on-chain
 4. Old credentials are cryptographically invalidated
+
+---
+
+## Flow 6: Fund Withdrawal
+
+```
+┌──────────────┐          ┌──────────────────────┐          ┌─────────────────┐          ┌───────────────┐
+│  Mobile App  │          │   ROFL TEE Backend   │          │  Base/Solana    │          │   Sapphire    │
+└──────┬───────┘          └──────────┬───────────┘          └────────┬────────┘          └───────┬───────┘
+       │                             │                               │                          │
+       │  POST /v1/wallets/withdraw  │                               │                          │
+       │  Authorization: Bearer xxx  │                               │                          │
+       │  {                          │                               │                          │
+       │    chain: "base",           │                               │                          │
+       │    token: "native",         │                               │                          │
+       │    toAddress: "0x...",      │                               │                          │
+       │    amount: "0.5"            │                               │                          │
+       │  }                          │                               │                          │
+       │────────────────────────────>│                               │                          │
+       │                             │                               │                          │
+       │                             │  1. Verify JWT                │                          │
+       │                             │     requireSession(token)     │                          │
+       │                             │     → Extract uid             │                          │
+       │                             │                               │                          │
+       │                             │  2. Validate Request          │                          │
+       │                             │     - Chain: base/solana      │                          │
+       │                             │     - Token: native/usdc      │                          │
+       │                             │     - Valid address format    │                          │
+       │                             │     - Amount > 0              │                          │
+       │                             │                               │                          │
+       │                             │  3. Derive Private Key        │                          │
+       │                             │     deriveEvmPrivKeyHex(uid)  │                          │
+       │                             │     (Key exists only in TEE   │                          │
+       │                             │      memory during operation) │                          │
+       │                             │                               │                          │
+       │                             │  4. Check Balance             │                          │
+       │                             │───────────────────────────────>│                          │
+       │                             │<───────────────────────────────│                          │
+       │                             │     Verify sufficient funds   │                          │
+       │                             │     + gas fees                │                          │
+       │                             │                               │                          │
+       │                             │  5. Sign & Broadcast TX       │                          │
+       │                             │───────────────────────────────>│                          │
+       │                             │     - Native: wallet.send()   │                          │
+       │                             │     - USDC: erc20.transfer()  │                          │
+       │                             │<───────────────────────────────│                          │
+       │                             │     txHash: "0xdef..."        │                          │
+       │                             │                               │                          │
+       │                             │  6. Record On-Chain Audit     │                          │
+       │                             │─────────────────────────────────────────────────────────>│
+       │                             │     PawPadAudit.recordExecution()                       │
+       │                             │     (WITHDRAW_ETH_BASE, txHash)                         │
+       │                             │                               │                          │
+       │                             │  7. Log to Database           │                          │
+       │                             │     TradeHistory.create({     │                          │
+       │                             │       action: "WITHDRAW"      │                          │
+       │                             │     })                        │                          │
+       │                             │                               │                          │
+       │<────────────────────────────│                               │                          │
+       │  {                          │                               │                          │
+       │    ok: true,                │                               │                          │
+       │    txHash: "0xdef...",      │                               │                          │
+       │    message: "Successfully   │                               │                          │
+       │      withdrew 0.5 ETH..."   │                               │                          │
+       │  }                          │                               │                          │
+       │                             │                               │                          │
+```
+
+**Withdrawal Tokens Supported**:
+| Chain   | Native   | USDC                    |
+|---------|----------|-------------------------|
+| Base    | ETH ✅   | USDC ✅                 |
+| Solana  | SOL ✅   | USDC (SPL) ⚠️ Planned   |
+
+**Security Notes**:
+- Private key derived on-demand and discarded after signing
+- Balance checks prevent overdraft attacks
+- Gas estimation ensures transaction success
+- All withdrawals logged to immutable on-chain audit
 
 ---
 
