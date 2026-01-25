@@ -16,27 +16,6 @@ PawPad is a privacy-preserving mobile wallet that enables automated AI-driven tr
 
 ---
 
-## Architecture Overview
-
-```
-┌─────────────────┐       ┌──────────────────────────┐       ┌─────────────────┐
-│   Mobile App    │◄─────►│   ROFL TEE Backend       │◄─────►│   Blockchains   │
-│   (Frontend)    │       │   (Node.js + Express)    │       │   (Base/Solana) │
-└─────────────────┘       └──────────────────────────┘       └─────────────────┘
-                                     │
-                                     ▼
-                          ┌──────────────────────┐
-                          │   MongoDB            │
-                          │   (User Configs)     │
-                          └──────────────────────┘
-                                     │
-                                     ▼
-                          ┌──────────────────────┐
-                          │   Oasis Sapphire     │
-                          │   (Identity Registry)│
-                          └──────────────────────┘
-```
-
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed flow diagrams.
 
 ---
@@ -198,8 +177,4 @@ pawpad_rofl/
 
 Apache-2.0
 
----
 
-## Contributing
-
-Contributions are welcome. Please open an issue first to discuss proposed changes.
