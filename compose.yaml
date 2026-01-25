@@ -1,15 +1,28 @@
 services:
   api:
-    image: docker.io/zkagi/pawpad-rofl-api:0.1.0
+    image: docker.io/zkagi/pawpad-rofl-api:0.3.2
     ports:
       - "8080:8080"
     environment:
       - PORT=8080
+
+      # 0 = real ROFL signer / appd, 1 = mock mode (keep 0 for mainnet)
       - MOCK_ROFL=0
-      - MONGO_URI=mongodb://mongo:27017/pawpad_rofl
+
+      # ROFL app daemon socket inside ROFL VM
       - ROFL_APPD_SOCKET=/run/rofl-appd.sock
-      - ROFL_APP_ID_BYTES21=0x00144c1d069741f49d1dfeffd52afb3b8e07447c60
-      - SAPPHIRE_RPC_URL=https://testnet.sapphire.oasis.io
-      - SAPPHIRE_CHAIN_ID=23295
-      - POLICY_CONTRACT=0x418f18f69eFd9ca9786997D6495CCae792d03466
-      - AUDIT_CONTRACT=0xE2F96db6a0011Af2BE129bedF2354b6bDeCD8704
+
+      # MAINNET: set after you deploy ROFL mainnet and convert appId -> bytes21
+      # Example format: 0x + 42 hex chars (21 bytes)
+      - ROFL_APP_ID_BYTES21=0x00a71e9a0068f229815e9c4fac0315dd0db3a19e5e
+
+      # Sapphire MAINNET
+      - SAPPHIRE_RPC_URL=https://sapphire.oasis.io
+      - SAPPHIRE_CHAIN_ID=23294
+
+      # MAINNET contract addresses (set after deploying contracts on Sapphire mainnet)
+      - POLICY_CONTRACT=0x99E83eEa09386173Eb8a08CF9F66851eAe87F4E7
+      - AUDIT_CONTRACT=0x658b23f8DB950bcB5176E1e7C2ECd7De683a0f7a
+
+    volumes:
+      - /run/rofl-appd.sock:/run/rofl-appd.sock

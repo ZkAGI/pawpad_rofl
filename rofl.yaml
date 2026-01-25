@@ -3,11 +3,11 @@ version: 0.1.0
 tee: tdx
 kind: container
 resources:
-  memory: 512
+  memory: 2048
   cpus: 1
   storage:
     kind: disk-persistent
-    size: 512
+    size: 4096
 artifacts:
   firmware: https://github.com/oasisprotocol/oasis-boot/releases/download/v0.6.2/ovmf.tdx.fd#db47100a7d6a0c1f6983be224137c3f8d7cb09b63bb1c7a5ee7829d8e994a42f
   kernel: https://github.com/oasisprotocol/oasis-boot/releases/download/v0.6.2/stage1.bin#e5d4d654ca1fa2c388bf64b23fc6e67815893fc7cb8b7cfee253d87963f54973
@@ -17,14 +17,14 @@ artifacts:
     compose: compose.yaml
 deployments:
   default:
-    app_id: rofl1qq2yc8gxjaqlf8galmla22hm8w8qw3ruvq0xt20c
-    network: testnet
+    app_id: rofl1qzn3axsqdreznq27n386cqc4m5xm8gv7tcu28y0e
+    network: mainnet
     paratime: sapphire
     admin: deployer
-    oci_repository: rofl.sh/c869c837-af3f-41a8-8ebd-0a007d9c7e55:1768941209
+    oci_repository: rofl.sh/b6ca14c8-9ebd-46f4-bf8c-f282fe460d92:1769287650
     trust_root:
-      height: 30326852
-      hash: b4915d43a28cede6c165b99e09663b8f0b77669f03cdd6d4ca844c38ef8b0cd6
+      height: 28347004
+      hash: a78599e160ffcbbbbda00769d3b1e14fd3ba4c0a8c6d9d33e5c16619c37ee960
     policy:
       quotes:
         pcs:
@@ -32,14 +32,14 @@ deployments:
           min_tcb_evaluation_data_number: 18
           tdx: {}
       enclaves:
-        - id: MhDR/l/DSspHCHhwEK04U7f8s8aUIerL7x/ModQIu3sAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
-        - id: sJHrUb2zwARe/516e0ZSyEuGEhYwjaYljSVC7JEflqcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+        - id: ftNp4dFgY9GgrTdz/i0Ei516rbKSuKcf3uq8A+mhJxYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
+        - id: 7YGbegiG81svHWReuiitndLwoA5MfPzD1fBubhBBZeMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==
       endorsements:
         - any: {}
       fees: endorsing_node
       max_expiration: 3
     machines:
       default:
-        provider: oasis1qp2ens0hsp7gh23wajxa4hpetkdek3swyyulyrmz
-        offer: playground_short
-        id: "0000000000000547"
+        provider: oasis1qzc8pldvm8vm3duvdrj63wgvkw34y9ucfcxzetqr
+        offer: large
+        id: 000000000000007d

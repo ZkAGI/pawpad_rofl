@@ -120,6 +120,7 @@ import { registerUserOnSapphire, getRoflSignerAddress, getRoflSignerBalance, sap
 import { roflStatus } from "./rofl_guard.js";
 import { UserConfig, TradeHistory } from "./database.js";
 import { executeWithdraw } from "./withdraw.js";
+import { CFG } from "./config.js";
 
 const router = Router();
 
@@ -161,7 +162,7 @@ router.get(
           balanceFormatted: `${(BigInt(balance) / 10n ** 18n).toString()} ROSE`,
         },
         note: balance === "0"
-          ? `Please fund ${address} with TEST ROSE from https://faucet.testnet.oasis.io/`
+          ? `Please fund ${address} with ROSE on Sapphire (Chain ID: ${CFG.sapphireChainId})`
           : undefined,
       });
     } catch (error: any) {
@@ -344,7 +345,7 @@ router.post(
 
     // Validate request body
     const body = z.object({
-      chain: z.enum(["base", "solana"]),
+      chain: z.enum(["base", "ethereum", "solana"]),
       token: z.enum(["native", "usdc"]),
       toAddress: z.string().min(1),
       amount: z.string().regex(/^\d+(\.\d+)?$/, "Amount must be a valid number")
@@ -376,11 +377,14 @@ router.post(
       uid,
       timestamp: new Date(),
       chain: body.chain,
-      asset: body.token === "native" ? (body.chain === "base" ? "ETH" : "SOL") : "USDC",
+      asset: body.token === "native"
+        ? (body.chain === "solana" ? "SOL" : "ETH")
+        : "USDC",
       action: "WITHDRAW",
       amount: body.amount,
+      toAddress: body.toAddress,
       txHash: result.txHash,
-      meta: { toAddress: body.toAddress, gasUsed: result.gasUsed }
+      meta: { gasUsed: result.gasUsed }
     });
 
     res.json({

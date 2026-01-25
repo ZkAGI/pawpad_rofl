@@ -37,25 +37,39 @@ const userConfigSchema = new mongoose.Schema({
 
 export const UserConfig = mongoose.model("UserConfig", userConfigSchema);
 
-// 2. Trade History (Executed Trades)
+// 2. Trade History (Executed Trades & Withdrawals)
 const tradeHistorySchema = new mongoose.Schema({
     uid: { type: String, required: true, index: true },
 
-    // Signal details
-    asset: { type: String, required: true }, // ETH or SOL
-    signal: { type: String, required: true }, // BUY, SELL, HOLD
+    // Action type - trade (BUY/SELL) or WITHDRAW
+    action: { type: String, required: true }, // BUY, SELL, WITHDRAW
+
+    // Asset being traded/withdrawn
+    asset: { type: String, required: true }, // ETH, SOL, USDC
+
+    // Signal details (optional - only for trades, not withdrawals)
+    signal: { type: String }, // BUY, SELL, HOLD (from signal provider)
     signalPrice: { type: Number },
 
     // Execution details
-    chain: { type: String, required: true }, // base, solana
+    chain: { type: String, required: true }, // base, ethereum, solana
     txHash: { type: String, required: true },
-    amountIn: { type: String, required: true },
-    tokenIn: { type: String, required: true },
-    amountOut: { type: String }, // Estimated or confirmed
+
+    // Trade amounts (optional - for trades)
+    amountIn: { type: String },
+    tokenIn: { type: String },
+    amountOut: { type: String },
     tokenOut: { type: String },
+
+    // Withdrawal info (optional - for withdrawals)
+    amount: { type: String }, // Withdrawal amount
+    toAddress: { type: String }, // Withdrawal destination
 
     status: { type: String, enum: ["pending", "success", "failed"], default: "success" },
     timestamp: { type: Date, default: Date.now },
+
+    // Extra metadata
+    meta: { type: mongoose.Schema.Types.Mixed },
 
     // PnL tracking (simplified)
     realizedPnl: { type: Number, default: 0 }

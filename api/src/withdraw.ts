@@ -3,8 +3,17 @@ import { Keypair, Connection, PublicKey, SystemProgram, Transaction, sendAndConf
 import { deriveEvmPrivKeyHex, deriveSolanaPrivKeyHex } from "./keys.js";
 import { sapphireRecordAudit } from "./sapphire.js";
 
-// Token addresses on Base
-const BASE_USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+// Token addresses per chain
+const USDC_ADDRESSES: Record<string, string> = {
+    base: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    ethereum: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+};
+
+// Default RPC URLs
+const RPC_URLS: Record<string, string> = {
+    base: "https://mainnet.base.org",
+    ethereum: "https://ethereum-rpc.publicnode.com"
+};
 
 // ERC20 ABI for token transfers
 const ERC20_ABI = [
@@ -18,11 +27,12 @@ const SPL_TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss6
 
 export interface WithdrawRequest {
     uid: string;
-    chain: "base" | "solana";
+    chain: "base" | "ethereum" | "solana";
     token: "native" | "usdc";
     toAddress: string;
     amount: string; // Human readable amount (e.g., "0.1" ETH or "50" USDC)
 }
+
 
 export interface WithdrawResult {
     ok: boolean;
@@ -39,8 +49,8 @@ export async function executeWithdraw(request: WithdrawRequest): Promise<Withdra
     const { uid, chain, token, toAddress, amount } = request;
 
     try {
-        if (chain === "base") {
-            return await executeEvmWithdraw(uid, token, toAddress, amount);
+        if (chain === "base" || chain === "ethereum") {
+            return await executeEvmWithdraw(uid, chain, token, toAddress, amount);
         } else if (chain === "solana") {
             return await executeSolanaWithdraw(uid, token, toAddress, amount);
         } else {
@@ -53,10 +63,11 @@ export async function executeWithdraw(request: WithdrawRequest): Promise<Withdra
 }
 
 /**
- * Execute withdrawal on Base (EVM)
+ * Execute withdrawal on EVM chains (Base, Ethereum)
  */
 async function executeEvmWithdraw(
     uid: string,
+    chain: "base" | "ethereum",
     token: "native" | "usdc",
     toAddress: string,
     amount: string
@@ -66,14 +77,19 @@ async function executeEvmWithdraw(
         return { ok: false, error: "Invalid EVM address" };
     }
 
-    // 2. Derive private key inside TEE
+    // 2. Get chain-specific config
+    const rpcUrl = process.env[`${chain.toUpperCase()}_RPC_URL`] || RPC_URLS[chain];
+    const usdcAddress = USDC_ADDRESSES[chain];
+
+    // 3. Derive private key inside TEE
     const pk = await deriveEvmPrivKeyHex(uid);
-    const provider = new ethers.JsonRpcProvider(process.env.BASE_RPC_URL || "https://mainnet.base.org");
+    const provider = new ethers.JsonRpcProvider(rpcUrl);
     const wallet = new Wallet(pk, provider);
 
-    console.log(`[Withdraw] Processing ${token} withdrawal for ${uid} to ${toAddress}`);
+    console.log(`[Withdraw] Processing ${token} withdrawal on ${chain} for ${uid} to ${toAddress}`);
 
     let txHash = "";
+
     let gasUsed = "";
 
     if (token === "native") {
@@ -112,7 +128,7 @@ async function executeEvmWithdraw(
 
     } else if (token === "usdc") {
         // 3b. USDC Token Transfer
-        const usdcContract = new ethers.Contract(BASE_USDC_ADDRESS, ERC20_ABI, wallet);
+        const usdcContract = new ethers.Contract(usdcAddress, ERC20_ABI, wallet);
 
         // USDC has 6 decimals
         const amountUnits = ethers.parseUnits(amount, 6);
@@ -148,7 +164,7 @@ async function executeEvmWithdraw(
     try {
         await sapphireRecordAudit({
             uid,
-            action: `WITHDRAW_${token.toUpperCase()}_BASE`,
+            action: `WITHDRAW_${token.toUpperCase()}_${chain.toUpperCase()}`,
             txHash,
             meta: JSON.stringify({ to: toAddress, amount })
         });
