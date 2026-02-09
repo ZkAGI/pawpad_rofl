@@ -45,7 +45,8 @@ const JUPITER_SWAP_API = "https://api.jup.ag/swap/v1/swap";
 
 type TradeAction = "BUY" | "SELL" | "HOLD";
 
-function normalizeAction(raw: any): TradeAction {
+
+export function normalizeAction(raw: any): TradeAction {
   const s = String(raw ?? "").toUpperCase();
   if (s === "BUY" || s === "SELL" || s === "HOLD") return s;
   return "HOLD";
@@ -73,7 +74,11 @@ function requireJupiterKey(): string {
 /**
  * Calculate minimum output with slippage protection
  */
-function applySlippage(amount: bigint, slippageBps: number): bigint {
+
+/**
+ * Calculate minimum output with slippage protection
+ */
+export function applySlippage(amount: bigint, slippageBps: number): bigint {
   // slippageBps of 100 = 1%, so multiplier is (10000 - 100) / 10000 = 0.99
   const multiplier = BigInt(10000 - slippageBps);
   return (amount * multiplier) / 10000n;
@@ -82,7 +87,11 @@ function applySlippage(amount: bigint, slippageBps: number): bigint {
 /**
  * Check if signal timestamp is fresh enough
  */
-function isSignalFresh(signalData: any): boolean {
+
+/**
+ * Check if signal timestamp is fresh enough
+ */
+export function isSignalFresh(signalData: any): boolean {
   if (!signalData?.timestamp) return false;
   const signalTime = new Date(signalData.timestamp).getTime();
   const now = Date.now();
