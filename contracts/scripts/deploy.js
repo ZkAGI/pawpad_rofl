@@ -31,7 +31,7 @@ const hre = require("hardhat");
 async function main() {
   // Trusted signer address derived from ROFL TEE key
   // key_id: "pawpad:sapphire:signer:v1"
-  const TRUSTED_SIGNER = "0x76....";
+  const TRUSTED_SIGNER = "";
 
   // Deploy PawPadPolicy(trustedSigner)
   const Policy = await hre.ethers.getContractFactory("PawPadPolicy");
