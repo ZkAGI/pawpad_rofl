@@ -155,7 +155,7 @@ export const TradeHistory = mongoose.model("TradeHistory", tradeHistorySchema);
 const signalLogSchema = new mongoose.Schema({
     asset: String,
     payload: mongoose.Schema.Types.Mixed,
-    timestamp: { type: Date, default: Date.now }
+    timestamp: { type: Date, default: Date.now, expires: 604800 } // 7 days TTL
 });
 
 export const SignalLog = mongoose.model("SignalLog", signalLogSchema);

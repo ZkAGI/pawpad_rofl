@@ -478,16 +478,27 @@ async function executeSolanaWithdraw(
 
     if (token === "native") {
         // 3a. Native SOL Transfer
-        const lamports = Math.floor(parseFloat(amount) * 1e9); // SOL has 9 decimals
+        // Use ethers.parseUnits for safe decimal handling (SOL has 9 decimals)
+        // This avoids floating point errors like 0.1 * 1e9 = 100000000.00000001
+        let lamports: bigint;
+        try {
+            lamports = ethers.parseUnits(amount, 9);
+        } catch (e) {
+            return { ok: false, error: "Invalid amount format" };
+        }
+
+        if (lamports <= 0n) return { ok: false, error: "Amount must be positive" };
+
+        const lamportsNumber = Number(lamports); // Safe for typical transfer amounts < MAX_SAFE_INTEGER (9M SOL)
 
         // Check balance
         const balance = await connection.getBalance(keypair.publicKey);
         const rentExempt = 5000; // Minimum rent + fee buffer
 
-        if (balance < lamports + rentExempt) {
+        if (balance < lamportsNumber + rentExempt) {
             return {
                 ok: false,
-                error: `Insufficient SOL balance. Have: ${balance / 1e9}, Need: ${(lamports + rentExempt) / 1e9}`
+                error: `Insufficient SOL balance. Have: ${balance / 1e9}, Need: ${(lamportsNumber + rentExempt) / 1e9}`
             };
         }
 
@@ -495,7 +506,7 @@ async function executeSolanaWithdraw(
             SystemProgram.transfer({
                 fromPubkey: keypair.publicKey,
                 toPubkey: toPubkey,
-                lamports: lamports
+                lamports: lamportsNumber
             })
         );
 
@@ -544,7 +555,14 @@ async function executeSolanaWithdraw(
             );
 
             // USDC has 6 decimals on Solana
-            const amountUnits = Math.floor(parseFloat(amount) * 1e6);
+            let amountUnits: bigint;
+            try {
+                amountUnits = ethers.parseUnits(amount, 6);
+            } catch (e) {
+                return { ok: false, error: "Invalid amount format" };
+            }
+
+            if (amountUnits <= 0n) return { ok: false, error: "Amount must be positive" };
 
             console.log(`[Withdraw] USDC transfer: ${amount} USDC to ${toAddress}`);
             console.log(`[Withdraw] Sender ATA: ${senderAta.toString()}`);
@@ -561,7 +579,7 @@ async function executeSolanaWithdraw(
                 };
             }
 
-            if (senderAccountInfo.amount < BigInt(amountUnits)) {
+            if (senderAccountInfo.amount < amountUnits) {
                 return {
                     ok: false,
                     error: `Insufficient USDC. Have: ${Number(senderAccountInfo.amount) / 1e6}, Need: ${amount}`

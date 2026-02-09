@@ -11,9 +11,31 @@ export const CFG = {
 
   // Trading & DB
   mongoUri: (process.env.MONGO_URI || "mongodb://127.0.0.1:27017/pawpad_rofl").trim(),
-  signalApiEth: "https://pawpad-arcium-backend.onrender.com/api/signals/ETH",
-  signalApiSol: "https://pawpad-arcium-backend.onrender.com/api/signals/SOL",
+  signalApiEth: "https://zynapse.zkagi.ai/v1/signal/ETH",
+  signalApiSol: "https://zynapse.zkagi.ai/v1/signal/SOL",
   tradingIntervalCron: "0 */4 * * *", // Every 4 hours
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // PRODUCTION SAFETY CONTROLS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Emergency kill switch - set to "1" to immediately halt all trading
+  // DEFAULT: TRUE (1) for safety. Must be explicitly set to "0" to enable.
+  tradingDisabled: (process.env.TRADING_DISABLED || "1").trim() === "1",
+
+  // Maximum slippage tolerance (basis points). 50 = 0.5%, 100 = 1%
+  maxSlippageBps: Number(process.env.MAX_SLIPPAGE_BPS || 100),
+
+  // Signal staleness limit in seconds. Signals older than this are rejected.
+  signalMaxAgeSeconds: Number(process.env.SIGNAL_MAX_AGE_SECONDS || 600), // 10 minutes
+
+  // Max price deviation from signal price to quote price (percent). Rejects bad quotes.
+  maxPriceDeviationPercent: Number(process.env.MAX_PRICE_DEVIATION_PERCENT || 5),
+
+  // Number of users to process concurrently during trading cycle
+  tradingConcurrency: Number(process.env.TRADING_CONCURRENCY || 5),
+
+  // ══════════════════════════════════════════════════════════════════════════
 
   sapphireRpc: (process.env.SAPPHIRE_RPC_URL || "https://testnet.sapphire.oasis.io").trim(),
   sapphireChainId: Number(process.env.SAPPHIRE_CHAIN_ID || 0x5aff),

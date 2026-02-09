@@ -671,6 +671,13 @@ const AuditAbi = [
   },
 ] as const;
 
+/**
+ * Send audit log via ROFL-authenticated transaction.
+ * 
+ * IMPORTANT: PawPadAudit.sol uses `roflEnsureAuthorizedOrigin(APP_ID)` which
+ * requires transactions to come through the ROFL runtime's special tx path,
+ * NOT via regular EOA signatures. We must use roflTxSignSubmit here.
+ */
 export async function sapphireRecordAudit(args: {
   uid: string;
   action: string;
@@ -678,35 +685,64 @@ export async function sapphireRecordAudit(args: {
   meta: string;
 }) {
   if (!CFG.auditContract) throw new Error("AUDIT_CONTRACT missing");
-  // Encode execution hash (simpler to just keccak the tx hash again or use directly if 32 bytes)
-  // Let's assume txHash is 0x... hex string.
+
+  if (CFG.mockRofl) {
+    console.log("MOCK_ROFL=1, skipping audit log");
+    return { ok: true, tx: { mocked: true } };
+  }
+
+  // Import roflTxSignSubmit dynamically to avoid circular deps
+  const { roflTxSignSubmit } = await import("./rofl.js");
+
   const execHash = keccak256(toHex(args.txHash));
 
-  return sendSapphireTx("recordExecution", [
-    uidHash(args.uid),
-    args.action,
-    execHash,
-    args.meta
-  ], CFG.auditContract); // Overload helper to accept target address
+  const calldata = encodeFunctionData({
+    abi: AuditAbi,
+    functionName: "recordExecution",
+    args: [
+      uidHash(args.uid),
+      args.action,
+      execHash,
+      args.meta,
+    ],
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Use ROFL-authenticated transaction path
+  // This is required for PawPadAudit's onlyRofl modifier
+  // ═══════════════════════════════════════════════════════════════════════════
+  const payload = {
+    encrypt: true,
+    tx: {
+      kind: "eth",
+      data: {
+        gas_limit: 200000,
+        to: CFG.auditContract,
+        value: "0",
+        data: calldata,
+      },
+    },
+  };
+
+  console.log(`Sending ROFL-authenticated audit tx for ${args.action}...`);
+  const result = await roflTxSignSubmit(payload);
+  console.log("Audit tx submitted via ROFL:", result);
+  return { ok: true, tx: result };
 }
 
 /**
- * Helper to send any tx to Policy or Audit Contract
+ * Helper to send Policy contract txs (trusted signer model - uses EOA wallet)
  */
-async function sendSapphireTx(functionName: string, args: any[], targetContract: string = ""): Promise<any> {
-  const to = targetContract || CFG.policyContract;
-  if (!to) throw new Error("Target contract missing in config");
+async function sendPolicyTx(functionName: string, args: any[]): Promise<any> {
+  if (!CFG.policyContract) throw new Error("POLICY_CONTRACT missing");
 
   if (CFG.mockRofl) {
     console.log(`MOCK_ROFL=1, skipping ${functionName}`);
     return { ok: true, tx: { mocked: true } };
   }
 
-  // Determine ABI based on contract target (Hacky but effective for now)
-  const abi = to === CFG.policyContract ? PolicyAbi : AuditAbi;
-
   const calldata = encodeFunctionData({
-    abi: abi as any,
+    abi: PolicyAbi as any,
     functionName: functionName as any,
     args: args as any,
   });
@@ -714,7 +750,7 @@ async function sendSapphireTx(functionName: string, args: any[], targetContract:
   const wallet = await getRoflSignerWallet();
   try {
     const tx = await wallet.sendTransaction({
-      to,
+      to: CFG.policyContract,
       data: calldata,
       gasLimit: 500000,
     });
@@ -737,7 +773,7 @@ export async function registerUserOnSapphire(args: {
   totpSecret: string;
   backupHash: `0x${string}`;
 }) {
-  return sendSapphireTx("registerUser", [
+  return sendPolicyTx("registerUser", [
     uidHash(args.uid),
     args.evmAddress,
     solanaPubkeyToBytes32(args.solanaAddressBase58),
@@ -751,7 +787,7 @@ export async function sapphireUpdateCommitments(args: {
   newTotpSecret: string;
   newBackupHash: `0x${string}`;
 }) {
-  return sendSapphireTx("updateCommitments", [
+  return sendPolicyTx("updateCommitments", [
     uidHash(args.uid),
     totpHash(args.newTotpSecret),
     args.newBackupHash,

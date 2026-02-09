@@ -1,539 +1,3 @@
-
-// import axios from "axios";
-// import { UserConfig, TradeHistory, SignalLog } from "./database.js";
-// import { CFG } from "./config.js";
-// import { deriveEvmPrivKeyHex, deriveSolanaPrivKeyHex } from "./keys.js";
-// import { ethers, Wallet } from "ethers";
-// import { sapphireRecordAudit } from "./sapphire.js";
-// import { Connection, VersionedTransaction, Keypair } from "@solana/web3.js";
-
-// // Standard ERC20 ABI
-// const ERC20_ABI = [
-//     "function balanceOf(address owner) view returns (uint256)",
-//     "function approve(address spender, uint256 value) returns (bool)",
-//     "function transfer(address to, uint256 value) returns (bool)"
-// ];
-
-// // --- CONSTANTS (BASE NETWORK) ---
-// const ROUTER_ADDRESS = "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24";
-// const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-// const WETH_ADDRESS = "0x4200000000000000000000000000000000000006";
-
-// // --- CONSTANTS (SOLANA) ---
-// const SOL_MINT = "So11111111111111111111111111111111111111112"; // Wrapped SOL
-// const USDC_MINT_SOL = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC on Solana
-// const JUPITER_QUOTE_API = "https://quote-api.jup.ag/v6/quote";
-// const JUPITER_SWAP_API = "https://quote-api.jup.ag/v6/swap";
-
-// export async function fetchSignal(asset: "ETH" | "SOL") {
-//     const url = asset === "ETH" ? CFG.signalApiEth : CFG.signalApiSol;
-//     try {
-//         const res = await axios.get(url, { timeout: 10000 });
-//         // Log raw signal for debugging
-//         await SignalLog.create({ asset, payload: res.data });
-//         return res.data;
-//     } catch (error: any) {
-//         console.warn(`Failed to fetch signal for ${asset}:`, error.message);
-//         return null;
-//     }
-// }
-// export async function runTradingCycle() {
-//     console.log("Starting trading cycle...");
-//     const signals = {
-//         ETH: await fetchSignal("ETH"),
-//         SOL: await fetchSignal("SOL")
-//     };
-//     // Iterate over all users who have enabled trading
-//     const users = await UserConfig.find({ tradingEnabled: true });
-//     for (const user of users) {
-//         try {
-//             if (signals.ETH && user.allowedAssets.includes("ETH")) {
-//                 await processUserTrade(user, "ETH", signals.ETH);
-//             }
-//             if (signals.SOL && user.allowedAssets.includes("SOL")) {
-//                 await processUserTrade(user, "SOL", signals.SOL);
-//             }
-//         } catch (e) {
-//             console.error(`Error processing trade for user ${user.uid}:`, e);
-//         }
-//     }
-// }
-// async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any) {
-//     const signal = signalData.signal; // "BUY", "SELL", "HOLD"
-//     // HOLD strategy: Do nothing
-//     if (signal === "HOLD") return;
-//     const uid = user.uid;
-//     console.log(`Executing ${signal} on ${asset} for ${uid} (Price: ${signalData.price})`);
-//     let txHash = "";
-//     if (asset === "ETH") {
-//         // --- EVM Execution (Base Network) ---
-//         try {
-//             const pk = await deriveEvmPrivKeyHex(uid);
-
-//             // 1. Setup Provider & Wallet
-//             // Fallback to public RPC if env var is missing
-//             const provider = new ethers.JsonRpcProvider(process.env.BASE_RPC_URL || "https://mainnet.base.org");
-//             const wallet = new Wallet(pk, provider);
-//             // 2. Setup Contracts
-//             const routerAbi = [
-//                 "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)",
-//                 "function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)",
-//                 "function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)"
-//             ];
-//             const router = new ethers.Contract(ROUTER_ADDRESS, routerAbi, wallet);
-//             const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, wallet);
-//             // 3. Execute Trade
-//             if (signal === "BUY") {
-//                 // Strategy: Buy ETH with 'maxTradeAmountUsdc'
-//                 const amountIn = ethers.parseUnits(String(user.maxTradeAmountUsdc), 6); // USDC = 6 decimals
-
-//                 // Check USDC balance first
-//                 const balance = await usdcContract.balanceOf(wallet.address);
-//                 if (balance < amountIn) {
-//                     console.warn(`Insufficient USDC balance for ${uid}. Have: ${ethers.formatUnits(balance, 6)}, Need: ${user.maxTradeAmountUsdc}`);
-//                     return; // Exit without trade
-//                 }
-
-//                 // Approve USDC spending
-//                 console.log(`Approving USDC for ${uid}...`);
-//                 const approveTx = await usdcContract.approve(ROUTER_ADDRESS, amountIn);
-//                 await approveTx.wait();
-
-//                 // Swap USDC -> WETH aka ETH
-//                 const deadline = Math.floor(Date.now() / 1000) + 60 * 20; // 20 mins
-//                 const tx = await router.swapExactTokensForETH(
-//                     amountIn,
-//                     0, // Slippage unchecked (Use Oracle/Quoter in Production!)
-//                     [USDC_ADDRESS, WETH_ADDRESS],
-//                     wallet.address,
-//                     deadline
-//                 );
-//                 console.log(`[EVM] Buy TX Sent: ${tx.hash}`);
-//                 const receipt = await tx.wait();
-//                 txHash = receipt.hash;
-//             } else if (signal === "SELL") {
-//                 // Strategy: Sell (Investment Value) worth of ETH back to USDC
-//                 // Amount ETH = (USD Amount) / (Price)
-//                 const amountEthFloat = user.maxTradeAmountUsdc / signalData.price;
-//                 const amountEthWei = ethers.parseEther(amountEthFloat.toFixed(18));
-//                 // Check Balance
-//                 const bal = await provider.getBalance(wallet.address);
-//                 if (bal < amountEthWei) {
-//                     console.warn(`Insufficient ETH balance for ${uid}. Have: ${bal}, Need: ${amountEthWei}`);
-//                     return; // Exit w/o trade
-//                 }
-//                 // Swap ETH -> USDC
-//                 const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
-//                 const tx = await router.swapExactETHForTokens(
-//                     0,
-//                     [WETH_ADDRESS, USDC_ADDRESS],
-//                     wallet.address,
-//                     deadline,
-//                     { value: amountEthWei }
-//                 );
-//                 console.log(`[EVM] Sell TX Sent: ${tx.hash}`);
-//                 const receipt = await tx.wait();
-//                 txHash = receipt.hash;
-//             }
-//         } catch (err: any) {
-//             console.error(`EVM Trade failed for ${uid}:`, err.message);
-//             txHash = "failed";
-//         }
-//     } else if (asset === "SOL") {
-//         // --- Solana Execution via Jupiter ---
-//         try {
-//             // 1. Derive Solana keypair inside TEE
-//             const pkHex = await deriveSolanaPrivKeyHex(uid);
-//             const seed = Uint8Array.from(Buffer.from(pkHex.slice(0, 64), "hex"));
-//             const keypair = Keypair.fromSeed(seed);
-//             const walletPubkey = keypair.publicKey.toString();
-
-//             console.log(`[SOL] Trading for ${uid} with wallet ${walletPubkey}`);
-
-//             // 2. Setup connection
-//             const connection = new Connection(
-//                 process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
-//                 "confirmed"
-//             );
-
-//             // 3. Determine swap direction
-//             let inputMint: string;
-//             let outputMint: string;
-//             let amount: number;
-
-//             if (signal === "BUY") {
-//                 // BUY SOL: Swap USDC -> SOL
-//                 inputMint = USDC_MINT_SOL;
-//                 outputMint = SOL_MINT;
-//                 // USDC has 6 decimals
-//                 amount = Math.floor(user.maxTradeAmountUsdc * 1e6);
-//             } else {
-//                 // SELL SOL: Swap SOL -> USDC
-//                 inputMint = SOL_MINT;
-//                 outputMint = USDC_MINT_SOL;
-//                 // Calculate SOL amount based on price (SOL has 9 decimals)
-//                 const solAmount = user.maxTradeAmountUsdc / signalData.price;
-//                 amount = Math.floor(solAmount * 1e9);
-//             }
-
-//             // 4. Get quote from Jupiter
-//             const quoteUrl = `${JUPITER_QUOTE_API}?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=100`;
-//             console.log(`[SOL] Getting quote from Jupiter...`);
-//             const quoteRes = await axios.get(quoteUrl, { timeout: 15000 });
-//             const quoteData = quoteRes.data;
-
-//             if (!quoteData || !quoteData.outAmount) {
-//                 console.error(`[SOL] Invalid quote response for ${uid}`);
-//                 txHash = "failed";
-//             } else {
-//                 console.log(`[SOL] Quote received: ${amount} -> ${quoteData.outAmount}`);
-
-//                 // 5. Get swap transaction from Jupiter
-//                 const swapRes = await axios.post(JUPITER_SWAP_API, {
-//                     quoteResponse: quoteData,
-//                     userPublicKey: walletPubkey,
-//                     wrapAndUnwrapSol: true,
-//                     dynamicComputeUnitLimit: true,
-//                     prioritizationFeeLamports: "auto"
-//                 }, { timeout: 30000 });
-
-//                 const swapTxBase64 = swapRes.data.swapTransaction;
-
-//                 if (!swapTxBase64) {
-//                     console.error(`[SOL] No swap transaction returned for ${uid}`);
-//                     txHash = "failed";
-//                 } else {
-//                     // 6. Deserialize, sign, and send transaction
-//                     const swapTxBuf = Buffer.from(swapTxBase64, "base64");
-//                     const transaction = VersionedTransaction.deserialize(swapTxBuf);
-
-//                     // Sign with TEE-derived keypair
-//                     transaction.sign([keypair]);
-
-//                     // 7. Broadcast transaction
-//                     console.log(`[SOL] Sending transaction...`);
-//                     const signature = await connection.sendTransaction(transaction, {
-//                         maxRetries: 3,
-//                         skipPreflight: false
-//                     });
-
-//                     console.log(`[SOL] TX Sent: ${signature}`);
-
-//                     // 8. Confirm transaction
-//                     const confirmation = await connection.confirmTransaction(signature, "confirmed");
-
-//                     if (confirmation.value.err) {
-//                         console.error(`[SOL] TX failed for ${uid}:`, confirmation.value.err);
-//                         txHash = "failed";
-//                     } else {
-//                         console.log(`[SOL] TX Confirmed: ${signature}`);
-//                         txHash = signature;
-//                     }
-//                 }
-//             }
-//         } catch (err: any) {
-//             console.error(`[SOL] Trade failed for ${uid}:`, err.message);
-//             txHash = "failed";
-//         }
-//     }
-//     // 4. Record Trade History (Database)
-//     if (txHash === "") return; // No trade attempted
-//     await TradeHistory.create({
-//         uid,
-//         asset,
-//         signal,
-//         signalPrice: signalData.price,
-//         chain: asset === "ETH" ? "base" : "solana",
-//         txHash,
-//         amountIn: String(user.maxTradeAmountUsdc),
-//         tokenIn: signal === "BUY" ? "USDC" : asset,
-//         status: txHash === "failed" ? "failed" : "success"
-//     });
-//     // 5. Record On-Chain Audit (Sapphire)
-//     if (txHash && txHash !== "failed") {
-//         try {
-//             await sapphireRecordAudit({
-//                 uid,
-//                 action: `TRADE_${signal}_${asset}`,
-//                 txHash,
-//                 meta: JSON.stringify({ price: signalData.price, amount: user.maxTradeAmountUsdc })
-//             });
-//             console.log(`Audit log confirmed for ${uid}`);
-//         } catch (e) {
-//             console.warn("Audit log failed (non-critical):", e);
-//         }
-//     }
-// }
-
-
-
-// import axios from "axios";
-// import { UserConfig, TradeHistory, SignalLog } from "./database.js";
-// import { CFG } from "./config.js";
-// import { deriveEvmPrivKeyHex, deriveSolanaPrivKeyHex } from "./keys.js";
-// import { ethers, Wallet } from "ethers";
-// import { sapphireRecordAudit } from "./sapphire.js";
-// import { Connection, VersionedTransaction, Keypair } from "@solana/web3.js";
-
-// // Standard ERC20 ABI
-// const ERC20_ABI = [
-//     "function balanceOf(address owner) view returns (uint256)",
-//     "function approve(address spender, uint256 value) returns (bool)",
-//     "function transfer(address to, uint256 value) returns (bool)"
-// ];
-
-// // --- CONSTANTS (BASE NETWORK) ---
-// const ROUTER_ADDRESS = "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24";
-// const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
-// const WETH_ADDRESS = "0x4200000000000000000000000000000000000006";
-
-// // --- CONSTANTS (SOLANA) ---
-// const SOL_MINT = "So11111111111111111111111111111111111111112"; // Wrapped SOL
-// const USDC_MINT_SOL = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC on Solana
-// const JUPITER_QUOTE_API = "https://quote-api.jup.ag/v6/quote";
-// const JUPITER_SWAP_API = "https://quote-api.jup.ag/v6/swap";
-
-// export async function fetchSignal(asset: "ETH" | "SOL") {
-//     const url = asset === "ETH" ? CFG.signalApiEth : CFG.signalApiSol;
-//     try {
-//         const res = await axios.get(url, { timeout: 10000 });
-//         // Log raw signal for debugging
-//         await SignalLog.create({ asset, payload: res.data });
-//         return res.data;
-//     } catch (error: any) {
-//         console.warn(`Failed to fetch signal for ${asset}:`, error.message);
-//         return null;
-//     }
-// }
-// export async function runTradingCycle() {
-//     console.log("Starting trading cycle...");
-//     const signals = {
-//         ETH: await fetchSignal("ETH"),
-//         SOL: await fetchSignal("SOL")
-//     };
-//     // Iterate over all users who have enabled trading
-//     const users = await UserConfig.find({ tradingEnabled: true });
-//     for (const user of users) {
-//         try {
-//             if (signals.ETH && user.allowedAssets.includes("ETH")) {
-//                 await processUserTrade(user, "ETH", signals.ETH);
-//             }
-//             if (signals.SOL && user.allowedAssets.includes("SOL")) {
-//                 await processUserTrade(user, "SOL", signals.SOL);
-//             }
-//         } catch (e) {
-//             console.error(`Error processing trade for user ${user.uid}:`, e);
-//         }
-//     }
-// }
-// async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any) {
-//     const signal = signalData.signal; // "BUY", "SELL", "HOLD"
-//     // HOLD strategy: Do nothing
-//     if (signal === "HOLD") return;
-//     const uid = user.uid;
-//     console.log(`Executing ${signal} on ${asset} for ${uid} (Price: ${signalData.price}, Score: ${signalData.score || 'N/A'}, Conf: ${signalData.confidence || 'N/A'})`);
-//     let txHash = "";
-//     if (asset === "ETH") {
-//         // --- EVM Execution (Base Network) ---
-//         try {
-//             const pk = await deriveEvmPrivKeyHex(uid);
-
-//             // 1. Setup Provider & Wallet
-//             // Fallback to public RPC if env var is missing
-//             const provider = new ethers.JsonRpcProvider(process.env.BASE_RPC_URL || "https://mainnet.base.org");
-//             const wallet = new Wallet(pk, provider);
-//             // 2. Setup Contracts
-//             const routerAbi = [
-//                 "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)",
-//                 "function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)",
-//                 "function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)"
-//             ];
-//             const router = new ethers.Contract(ROUTER_ADDRESS, routerAbi, wallet);
-//             const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, wallet);
-//             // 3. Execute Trade
-//             if (signal === "BUY") {
-//                 // Strategy: Buy ETH with 'maxTradeAmountUsdc'
-//                 const amountIn = ethers.parseUnits(String(user.maxTradeAmountUsdc), 6); // USDC = 6 decimals
-
-//                 // Check USDC balance first
-//                 const balance = await usdcContract.balanceOf(wallet.address);
-//                 if (balance < amountIn) {
-//                     console.warn(`Insufficient USDC balance for ${uid}. Have: ${ethers.formatUnits(balance, 6)}, Need: ${user.maxTradeAmountUsdc}`);
-//                     return; // Exit without trade
-//                 }
-
-//                 // Approve USDC spending
-//                 console.log(`Approving USDC for ${uid}...`);
-//                 const approveTx = await usdcContract.approve(ROUTER_ADDRESS, amountIn);
-//                 await approveTx.wait();
-
-//                 // Swap USDC -> WETH aka ETH
-//                 const deadline = Math.floor(Date.now() / 1000) + 60 * 20; // 20 mins
-//                 const tx = await router.swapExactTokensForETH(
-//                     amountIn,
-//                     0, // Slippage unchecked (Use Oracle/Quoter in Production!)
-//                     [USDC_ADDRESS, WETH_ADDRESS],
-//                     wallet.address,
-//                     deadline
-//                 );
-//                 console.log(`[EVM] Buy TX Sent: ${tx.hash}`);
-//                 const receipt = await tx.wait();
-//                 txHash = receipt.hash;
-//             } else if (signal === "SELL") {
-//                 // Strategy: Sell (Investment Value) worth of ETH back to USDC
-//                 // Amount ETH = (USD Amount) / (Price)
-//                 const amountEthFloat = user.maxTradeAmountUsdc / signalData.price;
-//                 const amountEthWei = ethers.parseEther(amountEthFloat.toFixed(18));
-//                 // Check Balance
-//                 const bal = await provider.getBalance(wallet.address);
-//                 if (bal < amountEthWei) {
-//                     console.warn(`Insufficient ETH balance for ${uid}. Have: ${bal}, Need: ${amountEthWei}`);
-//                     return; // Exit w/o trade
-//                 }
-//                 // Swap ETH -> USDC
-//                 const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
-//                 const tx = await router.swapExactETHForTokens(
-//                     0,
-//                     [WETH_ADDRESS, USDC_ADDRESS],
-//                     wallet.address,
-//                     deadline,
-//                     { value: amountEthWei }
-//                 );
-//                 console.log(`[EVM] Sell TX Sent: ${tx.hash}`);
-//                 const receipt = await tx.wait();
-//                 txHash = receipt.hash;
-//             }
-//         } catch (err: any) {
-//             console.error(`EVM Trade failed for ${uid}:`, err.message);
-//             txHash = "failed";
-//         }
-//     } else if (asset === "SOL") {
-//         // --- Solana Execution via Jupiter ---
-//         try {
-//             // 1. Derive Solana keypair inside TEE
-//             const pkHex = await deriveSolanaPrivKeyHex(uid);
-//             const seed = Uint8Array.from(Buffer.from(pkHex.slice(0, 64), "hex"));
-//             const keypair = Keypair.fromSeed(seed);
-//             const walletPubkey = keypair.publicKey.toString();
-
-//             console.log(`[SOL] Trading for ${uid} with wallet ${walletPubkey}`);
-
-//             // 2. Setup connection
-//             const connection = new Connection(
-//                 process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
-//                 "confirmed"
-//             );
-
-//             // 3. Determine swap direction
-//             let inputMint: string;
-//             let outputMint: string;
-//             let amount: number;
-
-//             if (signal === "BUY") {
-//                 // BUY SOL: Swap USDC -> SOL
-//                 inputMint = USDC_MINT_SOL;
-//                 outputMint = SOL_MINT;
-//                 // USDC has 6 decimals
-//                 amount = Math.floor(user.maxTradeAmountUsdc * 1e6);
-//             } else {
-//                 // SELL SOL: Swap SOL -> USDC
-//                 inputMint = SOL_MINT;
-//                 outputMint = USDC_MINT_SOL;
-//                 // Calculate SOL amount based on price (SOL has 9 decimals)
-//                 const solAmount = user.maxTradeAmountUsdc / signalData.price;
-//                 amount = Math.floor(solAmount * 1e9);
-//             }
-
-//             // 4. Get quote from Jupiter
-//             const quoteUrl = `${JUPITER_QUOTE_API}?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=100`;
-//             console.log(`[SOL] Getting quote from Jupiter...`);
-//             const quoteRes = await axios.get(quoteUrl, { timeout: 15000 });
-//             const quoteData = quoteRes.data;
-
-//             if (!quoteData || !quoteData.outAmount) {
-//                 console.error(`[SOL] Invalid quote response for ${uid}`);
-//                 txHash = "failed";
-//             } else {
-//                 console.log(`[SOL] Quote received: ${amount} -> ${quoteData.outAmount}`);
-
-//                 // 5. Get swap transaction from Jupiter
-//                 const swapRes = await axios.post(JUPITER_SWAP_API, {
-//                     quoteResponse: quoteData,
-//                     userPublicKey: walletPubkey,
-//                     wrapAndUnwrapSol: true,
-//                     dynamicComputeUnitLimit: true,
-//                     prioritizationFeeLamports: "auto"
-//                 }, { timeout: 30000 });
-
-//                 const swapTxBase64 = swapRes.data.swapTransaction;
-
-//                 if (!swapTxBase64) {
-//                     console.error(`[SOL] No swap transaction returned for ${uid}`);
-//                     txHash = "failed";
-//                 } else {
-//                     // 6. Deserialize, sign, and send transaction
-//                     const swapTxBuf = Buffer.from(swapTxBase64, "base64");
-//                     const transaction = VersionedTransaction.deserialize(swapTxBuf);
-
-//                     // Sign with TEE-derived keypair
-//                     transaction.sign([keypair]);
-
-//                     // 7. Broadcast transaction
-//                     console.log(`[SOL] Sending transaction...`);
-//                     const signature = await connection.sendTransaction(transaction, {
-//                         maxRetries: 3,
-//                         skipPreflight: false
-//                     });
-
-//                     console.log(`[SOL] TX Sent: ${signature}`);
-
-//                     // 8. Confirm transaction
-//                     const confirmation = await connection.confirmTransaction(signature, "confirmed");
-
-//                     if (confirmation.value.err) {
-//                         console.error(`[SOL] TX failed for ${uid}:`, confirmation.value.err);
-//                         txHash = "failed";
-//                     } else {
-//                         console.log(`[SOL] TX Confirmed: ${signature}`);
-//                         txHash = signature;
-//                     }
-//                 }
-//             }
-//         } catch (err: any) {
-//             console.error(`[SOL] Trade failed for ${uid}:`, err.message);
-//             txHash = "failed";
-//         }
-//     }
-//     // 4. Record Trade History (Database)
-//     if (txHash === "") return; // No trade attempted
-//     await TradeHistory.create({
-//         uid,
-//         action: signal,
-//         asset,
-//         signal,
-//         signalPrice: signalData.price,
-//         chain: asset === "ETH" ? "base" : "solana",
-//         txHash,
-//         amountIn: String(user.maxTradeAmountUsdc),
-//         tokenIn: signal === "BUY" ? "USDC" : asset,
-//         status: txHash === "failed" ? "failed" : "success"
-//     });
-//     // 5. Record On-Chain Audit (Sapphire)
-//     if (txHash && txHash !== "failed") {
-//         try {
-//             await sapphireRecordAudit({
-//                 uid,
-//                 action: `TRADE_${signal}_${asset}`,
-//                 txHash,
-//                 meta: JSON.stringify({ price: signalData.price, amount: user.maxTradeAmountUsdc })
-//             });
-//             console.log(`Audit log confirmed for ${uid}`);
-//         } catch (e) {
-//             console.warn("Audit log failed (non-critical):", e);
-//         }
-//     }
-// }
-
 import axios from "axios";
 import { UserConfig, TradeHistory, SignalLog } from "./database.js";
 import { CFG } from "./config.js";
@@ -542,17 +6,17 @@ import { ethers, Wallet } from "ethers";
 import { sapphireRecordAudit } from "./sapphire.js";
 import { Connection, VersionedTransaction, Keypair } from "@solana/web3.js";
 
-// =========================
-// HARD-CODE JUPITER API KEY
-// =========================
-// Paste your Jupiter API key here.
-// (Do NOT commit this to public repos.)
-const JUPITER_API_KEY = process.env.JUPITER_API_KEY
+// =============================================================================
+// CONSTANTS
+// =============================================================================
 
-// Standard ERC20 ABI
+const JUPITER_API_KEY = process.env.JUPITER_API_KEY || "";
+
+// Standard ERC20 ABI (includes allowance)
 const ERC20_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
   "function approve(address spender, uint256 value) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
   "function transfer(address to, uint256 value) returns (bool)",
 ];
 
@@ -561,13 +25,23 @@ const ROUTER_ADDRESS = "0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24";
 const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const WETH_ADDRESS = "0x4200000000000000000000000000000000000006";
 
-// --- CONSTANTS (SOLANA) ---
-const SOL_MINT = "So11111111111111111111111111111111111111112"; // Wrapped SOL mint
-const USDC_MINT_SOL = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"; // USDC mint (Solana)
+// Uniswap V2 Router ABI for getAmountsOut (quoting)
+const ROUTER_ABI = [
+  "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)",
+  "function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)",
+  "function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)",
+  "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)",
+];
 
-// Jupiter Swap API (requires x-api-key)
+// --- CONSTANTS (SOLANA) ---
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+const USDC_MINT_SOL = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const JUPITER_QUOTE_API = "https://api.jup.ag/swap/v1/quote";
 const JUPITER_SWAP_API = "https://api.jup.ag/swap/v1/swap";
+
+// =============================================================================
+// TYPES & HELPERS
+// =============================================================================
 
 type TradeAction = "BUY" | "SELL" | "HOLD";
 
@@ -577,7 +51,7 @@ function normalizeAction(raw: any): TradeAction {
   return "HOLD";
 }
 
-function safeErrMsg(err: any) {
+function safeErrMsg(err: any): string {
   if (err?.response?.data) {
     const status = err.response.status;
     const body =
@@ -589,13 +63,73 @@ function safeErrMsg(err: any) {
   return err?.message || String(err);
 }
 
-function requireJupiterKey() {
+function requireJupiterKey(): string {
   if (!JUPITER_API_KEY) {
     throw new Error("JUPITER_API_KEY is not set");
   }
   return JUPITER_API_KEY;
 }
 
+/**
+ * Calculate minimum output with slippage protection
+ */
+function applySlippage(amount: bigint, slippageBps: number): bigint {
+  // slippageBps of 100 = 1%, so multiplier is (10000 - 100) / 10000 = 0.99
+  const multiplier = BigInt(10000 - slippageBps);
+  return (amount * multiplier) / 10000n;
+}
+
+/**
+ * Check if signal timestamp is fresh enough
+ */
+function isSignalFresh(signalData: any): boolean {
+  if (!signalData?.timestamp) return false;
+  const signalTime = new Date(signalData.timestamp).getTime();
+  const now = Date.now();
+  const ageMs = now - signalTime;
+  return ageMs <= CFG.signalMaxAgeSeconds * 1000;
+}
+
+/**
+ * Run tasks with limited concurrency
+ */
+async function runWithConcurrency<T>(
+  tasks: (() => Promise<T>)[],
+  limit: number
+): Promise<T[]> {
+  const results: T[] = [];
+  const executing: Promise<void>[] = [];
+
+  for (const task of tasks) {
+    const p = task().then((result) => {
+      results.push(result);
+    });
+
+    executing.push(p as Promise<void>);
+
+    if (executing.length >= limit) {
+      await Promise.race(executing);
+      // Remove completed promises
+      for (let i = executing.length - 1; i >= 0; i--) {
+        // Check if promise is settled by racing with an immediate resolve
+        const settled = await Promise.race([
+          executing[i].then(() => true),
+          Promise.resolve(false),
+        ]);
+        if (settled) {
+          executing.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  await Promise.all(executing);
+  return results;
+}
+
+// =============================================================================
+// SIGNAL FETCHING
+// =============================================================================
 
 export async function fetchSignal(asset: "ETH" | "SOL") {
   const url = asset === "ETH" ? CFG.signalApiEth : CFG.signalApiSol;
@@ -610,7 +144,19 @@ export async function fetchSignal(asset: "ETH" | "SOL") {
   }
 }
 
+// =============================================================================
+// MAIN TRADING CYCLE
+// =============================================================================
+
 export async function runTradingCycle() {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EMERGENCY KILL SWITCH CHECK
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (CFG.tradingDisabled) {
+    console.warn("⛔ TRADING DISABLED via kill switch. Skipping cycle.");
+    return;
+  }
+
   console.log("Starting trading cycle...");
 
   const signals = {
@@ -618,9 +164,31 @@ export async function runTradingCycle() {
     SOL: await fetchSignal("SOL"),
   };
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SIGNAL STALENESS CHECK
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (signals.ETH && !isSignalFresh(signals.ETH)) {
+    console.warn(`⚠️ ETH signal is stale (older than ${CFG.signalMaxAgeSeconds}s). Skipping.`);
+    signals.ETH = null;
+  }
+  if (signals.SOL && !isSignalFresh(signals.SOL)) {
+    console.warn(`⚠️ SOL signal is stale (older than ${CFG.signalMaxAgeSeconds}s). Skipping.`);
+    signals.SOL = null;
+  }
+
   const users = await UserConfig.find({ tradingEnabled: true });
 
-  for (const user of users) {
+  if (users.length === 0) {
+    console.log("No users with trading enabled.");
+    return;
+  }
+
+  console.log(`Processing ${users.length} users with concurrency ${CFG.tradingConcurrency}`);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PARALLEL PROCESSING WITH CONCURRENCY LIMIT
+  // ═══════════════════════════════════════════════════════════════════════════
+  const tasks = users.map((user) => async () => {
     try {
       if (signals.ETH && user.allowedAssets?.includes("ETH")) {
         await processUserTrade(user, "ETH", signals.ETH);
@@ -631,28 +199,33 @@ export async function runTradingCycle() {
     } catch (e: any) {
       console.error(`Error processing trade for user ${user.uid}:`, safeErrMsg(e));
     }
-  }
+  });
+
+  await runWithConcurrency(tasks, CFG.tradingConcurrency);
+  console.log("Trading cycle complete.");
 }
+
+// =============================================================================
+// PROCESS INDIVIDUAL USER TRADE
+// =============================================================================
 
 async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any) {
   const uid = user.uid;
-
-  // ALWAYS normalize
   const signal: TradeAction = normalizeAction(signalData?.signal);
 
-  // HOLD means no trade
   if (signal === "HOLD") return;
 
   console.log(
-    `Executing ${signal} on ${asset} for ${uid} (Price: ${signalData.price}, Score: ${
-      signalData.score ?? "N/A"
-    }, Conf: ${signalData.confidence ?? "N/A"})`
+    `Executing ${signal} on ${asset} for ${uid} (Price: ${signalData.price})`
   );
 
   let txHash = "";
   let attempted = false;
   let failReason = "";
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // EVM TRADING (BASE NETWORK)
+  // ═══════════════════════════════════════════════════════════════════════════
   if (asset === "ETH") {
     attempted = true;
     try {
@@ -662,47 +235,76 @@ async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any
       );
       const wallet = new Wallet(pk, provider);
 
-      const routerAbi = [
-        "function swapExactTokensForTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)",
-        "function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable returns (uint[] memory amounts)",
-        "function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external returns (uint[] memory amounts)",
-      ];
-
-      const router = new ethers.Contract(ROUTER_ADDRESS, routerAbi, wallet);
+      const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, wallet);
       const usdcContract = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, wallet);
 
       if (signal === "BUY") {
+        // BUY: USDC -> ETH
         const amountIn = ethers.parseUnits(String(user.maxTradeAmountUsdc), 6);
 
+        // Check balance
         const balance = await usdcContract.balanceOf(wallet.address);
         if (balance < amountIn) {
           console.warn(
-            `Insufficient USDC balance for ${uid}. Have: ${ethers.formatUnits(
-              balance,
-              6
-            )}, Need: ${user.maxTradeAmountUsdc}`
+            `Insufficient USDC balance for ${uid}. Have: ${ethers.formatUnits(balance, 6)}, Need: ${user.maxTradeAmountUsdc}`
           );
           txHash = "failed";
           failReason = "INSUFFICIENT_USDC";
         } else {
-          console.log(`Approving USDC for ${uid}...`);
-          const approveTx = await usdcContract.approve(ROUTER_ADDRESS, amountIn);
-          await approveTx.wait();
+          // ═══════════════════════════════════════════════════════════════════
+          // SMART ALLOWANCE: Check before approving
+          // ═══════════════════════════════════════════════════════════════════
+          const currentAllowance = await usdcContract.allowance(wallet.address, ROUTER_ADDRESS);
+          if (currentAllowance < amountIn) {
+            console.log(`Approving USDC for ${uid}...`);
+            const approveTx = await usdcContract.approve(ROUTER_ADDRESS, amountIn);
+            await approveTx.wait();
+          } else {
+            console.log(`Sufficient allowance exists for ${uid}, skipping approve.`);
+          }
 
-          const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
-          const tx = await router.swapExactTokensForETH(
-            amountIn,
-            0,
-            [USDC_ADDRESS, WETH_ADDRESS],
-            wallet.address,
-            deadline
+          // ═══════════════════════════════════════════════════════════════════
+          // SLIPPAGE PROTECTION: Get quote first
+          // ═══════════════════════════════════════════════════════════════════
+          const path = [USDC_ADDRESS, WETH_ADDRESS];
+          const amounts = await router.getAmountsOut(amountIn, path);
+          const expectedOut = amounts[1]; // WETH amount
+          const amountOutMin = applySlippage(expectedOut, CFG.maxSlippageBps);
+
+          console.log(
+            `[EVM BUY] Quote: ${ethers.formatUnits(amountIn, 6)} USDC -> ${ethers.formatEther(expectedOut)} ETH (min: ${ethers.formatEther(amountOutMin)})`
           );
 
-          console.log(`[EVM] Buy TX Sent: ${tx.hash}`);
-          const receipt = await tx.wait();
-          txHash = receipt.hash;
+          // ═══════════════════════════════════════════════════════════════════
+          // PRICE SANITY CHECK
+          // ═══════════════════════════════════════════════════════════════════
+          const quotedPriceUsd = Number(user.maxTradeAmountUsdc) / Number(ethers.formatEther(expectedOut));
+          const signalPrice = Number(signalData.price);
+          const deviation = Math.abs(quotedPriceUsd - signalPrice) / signalPrice * 100;
+
+          if (deviation > CFG.maxPriceDeviationPercent) {
+            console.warn(
+              `[EVM] Price deviation too high for ${uid}: quoted $${quotedPriceUsd.toFixed(2)} vs signal $${signalPrice} (${deviation.toFixed(1)}%)`
+            );
+            txHash = "failed";
+            failReason = "PRICE_DEVIATION_TOO_HIGH";
+          } else {
+            const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
+            const tx = await router.swapExactTokensForETH(
+              amountIn,
+              amountOutMin,
+              path,
+              wallet.address,
+              deadline
+            );
+
+            console.log(`[EVM] Buy TX Sent: ${tx.hash}`);
+            const receipt = await tx.wait();
+            txHash = receipt.hash;
+          }
         }
       } else if (signal === "SELL") {
+        // SELL: ETH -> USDC
         const price = Number(signalData.price);
         if (!price || price <= 0) {
           txHash = "failed";
@@ -718,18 +320,45 @@ async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any
             txHash = "failed";
             failReason = "INSUFFICIENT_ETH";
           } else {
-            const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
-            const tx = await router.swapExactETHForTokens(
-              0,
-              [WETH_ADDRESS, USDC_ADDRESS],
-              wallet.address,
-              deadline,
-              { value: amountEthWei }
+            // ═══════════════════════════════════════════════════════════════════
+            // SLIPPAGE PROTECTION: Get quote first
+            // ═══════════════════════════════════════════════════════════════════
+            const path = [WETH_ADDRESS, USDC_ADDRESS];
+            const amounts = await router.getAmountsOut(amountEthWei, path);
+            const expectedOut = amounts[1]; // USDC amount
+            const amountOutMin = applySlippage(expectedOut, CFG.maxSlippageBps);
+
+            console.log(
+              `[EVM SELL] Quote: ${ethers.formatEther(amountEthWei)} ETH -> ${ethers.formatUnits(expectedOut, 6)} USDC (min: ${ethers.formatUnits(amountOutMin, 6)})`
             );
 
-            console.log(`[EVM] Sell TX Sent: ${tx.hash}`);
-            const receipt = await tx.wait();
-            txHash = receipt.hash;
+            // ═══════════════════════════════════════════════════════════════════
+            // PRICE SANITY CHECK
+            // ═══════════════════════════════════════════════════════════════════
+            const quotedPriceUsd = Number(ethers.formatUnits(expectedOut, 6)) / amountEthFloat;
+            const signalPrice = Number(signalData.price);
+            const deviation = Math.abs(quotedPriceUsd - signalPrice) / signalPrice * 100;
+
+            if (deviation > CFG.maxPriceDeviationPercent) {
+              console.warn(
+                `[EVM] Price deviation too high for ${uid}: quoted $${quotedPriceUsd.toFixed(2)} vs signal $${signalPrice} (${deviation.toFixed(1)}%)`
+              );
+              txHash = "failed";
+              failReason = "PRICE_DEVIATION_TOO_HIGH";
+            } else {
+              const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
+              const tx = await router.swapExactETHForTokens(
+                amountOutMin,
+                path,
+                wallet.address,
+                deadline,
+                { value: amountEthWei }
+              );
+
+              console.log(`[EVM] Sell TX Sent: ${tx.hash}`);
+              const receipt = await tx.wait();
+              txHash = receipt.hash;
+            }
           }
         }
       }
@@ -740,12 +369,14 @@ async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SOLANA TRADING (JUPITER)
+  // ═══════════════════════════════════════════════════════════════════════════
   if (asset === "SOL") {
     attempted = true;
     try {
       const jupKey = requireJupiterKey();
 
-      // 1) Derive solana keypair
       const pkHex = await deriveSolanaPrivKeyHex(uid);
       const seed = Uint8Array.from(Buffer.from(pkHex.slice(0, 64), "hex"));
       const keypair = Keypair.fromSeed(seed);
@@ -753,37 +384,26 @@ async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any
 
       console.log(`[SOL] Trading for ${uid} with wallet ${walletPubkey}`);
 
-      // 2) Connection
       const connection = new Connection(
         process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
         "confirmed"
       );
 
-      // 2.1) Fee check (prevents fee-payer issues)
+      // Fee check
       const feeBal = await connection.getBalance(keypair.publicKey);
       if (feeBal < 2_000_000) {
-        // ~0.002 SOL
         txHash = "failed";
         failReason = "INSUFFICIENT_SOL_FOR_FEES";
-        console.warn(`[SOL] Low SOL for fees for ${uid} (${walletPubkey}): ${feeBal} lamports`);
+        console.warn(`[SOL] Low SOL for fees for ${uid}: ${feeBal} lamports`);
         await recordTradeHistorySafe({
-          uid,
-          action: signal,
-          asset,
-          signal,
-          signalData,
-          txHash,
-          user,
-          failReason,
+          uid, action: signal, asset, signal, signalData, txHash, user, failReason,
         });
         return;
       }
 
-      // 3) Direction + amount
       let inputMint: string;
       let outputMint: string;
       let amount: number;
-
       const price = Number(signalData.price);
 
       if (signal === "BUY") {
@@ -799,14 +419,7 @@ async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any
           failReason = "INVALID_PRICE";
           console.warn(`[SOL] Invalid price in signal for ${uid}:`, signalData.price);
           await recordTradeHistorySafe({
-            uid,
-            action: signal,
-            asset,
-            signal,
-            signalData,
-            txHash,
-            user,
-            failReason,
+            uid, action: signal, asset, signal, signalData, txHash, user, failReason,
           });
           return;
         }
@@ -815,7 +428,7 @@ async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any
         amount = Math.floor(solAmount * 1e9);
       }
 
-      // 4) Quote
+      // Get quote with slippage from config
       console.log(`[SOL] Getting quote from Jupiter...`);
       const quoteRes = await axios.get(JUPITER_QUOTE_API, {
         timeout: 15000,
@@ -824,7 +437,7 @@ async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any
           inputMint,
           outputMint,
           amount,
-          slippageBps: 100,
+          slippageBps: CFG.maxSlippageBps,
         },
       });
 
@@ -837,55 +450,74 @@ async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any
       } else {
         console.log(`[SOL] Quote received: ${amount} -> ${quoteData.outAmount}`);
 
-        // 5) Build swap tx
-        const swapRes = await axios.post(
-          JUPITER_SWAP_API,
-          {
-            quoteResponse: quoteData,
-            userPublicKey: walletPubkey,
-            wrapAndUnwrapSol: true,
-            dynamicComputeUnitLimit: true,
-            prioritizationFeeLamports: "auto",
-          },
-          {
-            timeout: 30000,
-            headers: {
-              "Content-Type": "application/json",
-              "x-api-key": jupKey,
-            },
-          }
-        );
-
-        const swapTxBase64 = swapRes.data?.swapTransaction;
-
-        if (!swapTxBase64) {
-          txHash = "failed";
-          failReason = "NO_SWAP_TX";
-          console.error(`[SOL] No swap transaction returned for ${uid}`);
+        // ═══════════════════════════════════════════════════════════════════
+        // PRICE SANITY CHECK FOR SOLANA
+        // ═══════════════════════════════════════════════════════════════════
+        let quotedPrice: number;
+        if (signal === "BUY") {
+          // USDC -> SOL: price = USDC amount / SOL amount
+          quotedPrice = (amount / 1e6) / (Number(quoteData.outAmount) / 1e9);
         } else {
-          // 6) Deserialize + sign
-          const swapTxBuf = Buffer.from(swapTxBase64, "base64");
-          const transaction = VersionedTransaction.deserialize(swapTxBuf);
-          transaction.sign([keypair]);
+          // SOL -> USDC: price = USDC amount / SOL amount
+          quotedPrice = (Number(quoteData.outAmount) / 1e6) / (amount / 1e9);
+        }
 
-          // 7) Send
-          console.log(`[SOL] Sending transaction...`);
-          const signature = await connection.sendTransaction(transaction, {
-            maxRetries: 3,
-            skipPreflight: false,
-          });
+        const deviation = Math.abs(quotedPrice - price) / price * 100;
 
-          console.log(`[SOL] TX Sent: ${signature}`);
+        if (deviation > CFG.maxPriceDeviationPercent) {
+          console.warn(
+            `[SOL] Price deviation too high for ${uid}: quoted $${quotedPrice.toFixed(2)} vs signal $${price} (${deviation.toFixed(1)}%)`
+          );
+          txHash = "failed";
+          failReason = "PRICE_DEVIATION_TOO_HIGH";
+        } else {
+          // Build swap tx
+          const swapRes = await axios.post(
+            JUPITER_SWAP_API,
+            {
+              quoteResponse: quoteData,
+              userPublicKey: walletPubkey,
+              wrapAndUnwrapSol: true,
+              dynamicComputeUnitLimit: true,
+              prioritizationFeeLamports: "auto",
+            },
+            {
+              timeout: 30000,
+              headers: {
+                "Content-Type": "application/json",
+                "x-api-key": jupKey,
+              },
+            }
+          );
 
-          // 8) Confirm
-          const confirmation = await connection.confirmTransaction(signature, "confirmed");
-          if (confirmation.value.err) {
+          const swapTxBase64 = swapRes.data?.swapTransaction;
+
+          if (!swapTxBase64) {
             txHash = "failed";
-            failReason = "CONFIRM_ERR";
-            console.error(`[SOL] TX failed for ${uid}:`, confirmation.value.err);
+            failReason = "NO_SWAP_TX";
+            console.error(`[SOL] No swap transaction returned for ${uid}`);
           } else {
-            txHash = signature;
-            console.log(`[SOL] TX Confirmed: ${signature}`);
+            const swapTxBuf = Buffer.from(swapTxBase64, "base64");
+            const transaction = VersionedTransaction.deserialize(swapTxBuf);
+            transaction.sign([keypair]);
+
+            console.log(`[SOL] Sending transaction...`);
+            const signature = await connection.sendTransaction(transaction, {
+              maxRetries: 3,
+              skipPreflight: false,
+            });
+
+            console.log(`[SOL] TX Sent: ${signature}`);
+
+            const confirmation = await connection.confirmTransaction(signature, "confirmed");
+            if (confirmation.value.err) {
+              txHash = "failed";
+              failReason = "CONFIRM_ERR";
+              console.error(`[SOL] TX failed for ${uid}:`, confirmation.value.err);
+            } else {
+              txHash = signature;
+              console.log(`[SOL] TX Confirmed: ${signature}`);
+            }
           }
         }
       }
@@ -898,16 +530,9 @@ async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any
 
   if (!attempted) return;
 
-  // Record Trade History (never throws)
+  // Record Trade History
   await recordTradeHistorySafe({
-    uid,
-    action: signal,
-    asset,
-    signal,
-    signalData,
-    txHash,
-    user,
-    failReason,
+    uid, action: signal, asset, signal, signalData, txHash, user, failReason,
   });
 
   // Sapphire audit only on success
@@ -926,6 +551,10 @@ async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any
   }
 }
 
+// =============================================================================
+// DATABASE HELPER
+// =============================================================================
+
 async function recordTradeHistorySafe(args: {
   uid: string;
   action: TradeAction;
@@ -943,7 +572,7 @@ async function recordTradeHistorySafe(args: {
   try {
     await TradeHistory.create({
       uid,
-      action, // ALWAYS set (prevents validation crash)
+      action,
       asset,
       signal,
       signalPrice: signalData?.price,
@@ -952,7 +581,6 @@ async function recordTradeHistorySafe(args: {
       amountIn: String(user.maxTradeAmountUsdc),
       tokenIn: signal === "BUY" ? "USDC" : asset,
       status: txHash === "failed" ? "failed" : "success",
-      // If your schema doesn't have `reason`, remove this line.
       ...(failReason ? { reason: failReason } : {}),
     });
   } catch (dbErr: any) {
