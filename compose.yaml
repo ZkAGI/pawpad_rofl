@@ -1,6 +1,6 @@
 services:
   api:
-    image: docker.io/zkagi/pawpad-rofl-api:0.3.2
+    image: docker.io/zkagi/pawpad-rofl-api:0.5.2
     ports:
       - "8080:8080"
     environment:
@@ -8,7 +8,11 @@ services:
 
       # 0 = real ROFL signer / appd, 1 = mock mode (keep 0 for mainnet)
       - MOCK_ROFL=0
+      - JUPITER_API_KEY=
 
+      # IMPORTANT: keep secrets out of git if possible
+      # Put your real Mongo URI here or inject via ROFL secrets if supported in your setup.
+      - MONGO_URI=
       # ROFL app daemon socket inside ROFL VM
       - ROFL_APPD_SOCKET=/run/rofl-appd.sock
 
