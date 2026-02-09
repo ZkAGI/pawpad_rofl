@@ -32,6 +32,11 @@ export const CFG = {
   // Max price deviation from signal price to quote price (percent). Rejects bad quotes.
   maxPriceDeviationPercent: Number(process.env.MAX_PRICE_DEVIATION_PERCENT || 5),
 
+  // Max deviation from CEX price (CoinGecko) percent. 
+  // If DEX price differs from CEX by more than this, trade is aborted.
+  cexPriceDeviationPercent: Number(process.env.CEX_PRICE_DEVIATION_PERCENT || 5),
+  coingeckoApiKey: (process.env.COINGECKO_API_KEY || "").trim(),
+
   // Number of users to process concurrently during trading cycle
   tradingConcurrency: Number(process.env.TRADING_CONCURRENCY || 5),
 

@@ -144,6 +144,37 @@ export async function fetchSignal(asset: "ETH" | "SOL") {
   }
 }
 
+// Helper to fetch CEX prices (CoinGecko)
+async function fetchCexPrices(): Promise<{ ETH: number; SOL: number } | null> {
+  try {
+    const url = CFG.coingeckoApiKey
+      ? "https://pro-api.coingecko.com/api/v3/simple/price"
+      : "https://api.coingecko.com/api/v3/simple/price";
+
+    const params: any = {
+      ids: "ethereum,solana",
+      vs_currencies: "usd"
+    };
+    const headers: any = {};
+    if (CFG.coingeckoApiKey) {
+      headers["x-cg-pro-api-key"] = CFG.coingeckoApiKey;
+    }
+
+    const res = await axios.get(url, { params, headers, timeout: 5000 });
+    if (res.data && res.data.ethereum && res.data.solana) {
+      console.log(`[CEX] Prices fetched: ETH=$${res.data.ethereum.usd}, SOL=$${res.data.solana.usd}`);
+      return {
+        ETH: res.data.ethereum.usd,
+        SOL: res.data.solana.usd
+      };
+    }
+    return null;
+  } catch (e: any) {
+    console.warn(`[CEX] Failed to fetch prices: ${e.message}`);
+    return null;
+  }
+}
+
 // =============================================================================
 // MAIN TRADING CYCLE
 // =============================================================================
@@ -163,6 +194,9 @@ export async function runTradingCycle() {
     ETH: await fetchSignal("ETH"),
     SOL: await fetchSignal("SOL"),
   };
+
+  // 2. Fetch CEX prices for safety check
+  const cexPrices = await fetchCexPrices();
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SIGNAL STALENESS CHECK
@@ -191,10 +225,10 @@ export async function runTradingCycle() {
   const tasks = users.map((user) => async () => {
     try {
       if (signals.ETH && user.allowedAssets?.includes("ETH")) {
-        await processUserTrade(user, "ETH", signals.ETH);
+        await processUserTrade(user, "ETH", signals.ETH, cexPrices?.ETH);
       }
       if (signals.SOL && user.allowedAssets?.includes("SOL")) {
-        await processUserTrade(user, "SOL", signals.SOL);
+        await processUserTrade(user, "SOL", signals.SOL, cexPrices?.SOL);
       }
     } catch (e: any) {
       console.error(`Error processing trade for user ${user.uid}:`, safeErrMsg(e));
@@ -209,11 +243,25 @@ export async function runTradingCycle() {
 // PROCESS INDIVIDUAL USER TRADE
 // =============================================================================
 
-async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any) {
+async function processUserTrade(user: any, asset: "ETH" | "SOL", signalData: any, cexPrice?: number) {
   const uid = user.uid;
   const signal: TradeAction = normalizeAction(signalData?.signal);
 
   if (signal === "HOLD") return;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CEX PRICE SANITY CHECK
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (cexPrice && signalData?.price) {
+    const signalPrice = Number(signalData.price);
+    const diff = Math.abs(signalPrice - cexPrice);
+    const pctDiff = (diff / cexPrice) * 100;
+
+    if (pctDiff > CFG.cexPriceDeviationPercent) {
+      console.warn(`[${asset}] 🛑 CEX ABORT: Signal ($${signalPrice}) vs CEX ($${cexPrice}) deviates ${pctDiff.toFixed(2)}%`);
+      return;
+    }
+  }
 
   console.log(
     `Executing ${signal} on ${asset} for ${uid} (Price: ${signalData.price})`
