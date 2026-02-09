@@ -313,6 +313,18 @@ export interface WithdrawResult {
     gasUsed?: string;
 }
 
+// Helper to validate and parse amount
+export function validateAndParseAmount(amount: string, decimals: number): { valid: boolean; value?: bigint; error?: string } {
+    try {
+        if (!amount || typeof amount !== 'string') return { valid: false, error: "Invalid amount format" };
+        const val = ethers.parseUnits(amount, decimals);
+        if (val <= 0n) return { valid: false, error: "Amount must be positive" };
+        return { valid: true, value: val };
+    } catch (e) {
+        return { valid: false, error: "Invalid amount format" };
+    }
+}
+
 /**
  * Withdraw funds from user's PawPad wallet to an external address
  * This is a critical function - all operations happen inside TEE
@@ -366,7 +378,9 @@ async function executeEvmWithdraw(
 
     if (token === "native") {
         // 3a. Native ETH Transfer
-        const amountWei = ethers.parseEther(amount);
+        const parsed = validateAndParseAmount(amount, 18);
+        if (!parsed.valid || !parsed.value) return { ok: false, error: parsed.error };
+        const amountWei = parsed.value;
 
         // Check balance
         const balance = await provider.getBalance(wallet.address);
@@ -403,7 +417,9 @@ async function executeEvmWithdraw(
         const usdcContract = new ethers.Contract(usdcAddress, ERC20_ABI, wallet);
 
         // USDC has 6 decimals
-        const amountUnits = ethers.parseUnits(amount, 6);
+        const parsed = validateAndParseAmount(amount, 6);
+        if (!parsed.valid || !parsed.value) return { ok: false, error: parsed.error };
+        const amountUnits = parsed.value;
 
         // Check USDC balance
         const balance = await usdcContract.balanceOf(wallet.address);
@@ -479,13 +495,18 @@ async function executeSolanaWithdraw(
     if (token === "native") {
         // 3a. Native SOL Transfer
         // Use ethers.parseUnits for safe decimal handling (SOL has 9 decimals)
-        // This avoids floating point errors like 0.1 * 1e9 = 100000000.00000001
+        const parsed = validateAndParseAmount(amount, 9);
+        if (!parsed.valid || !parsed.value) return { ok: false, error: parsed.error };
+        const lamports = parsed.value;
+
+        /*
         let lamports: bigint;
         try {
             lamports = ethers.parseUnits(amount, 9);
         } catch (e) {
             return { ok: false, error: "Invalid amount format" };
         }
+        */
 
         if (lamports <= 0n) return { ok: false, error: "Amount must be positive" };
 
@@ -555,12 +576,18 @@ async function executeSolanaWithdraw(
             );
 
             // USDC has 6 decimals on Solana
+            const parsed = validateAndParseAmount(amount, 6);
+            if (!parsed.valid || !parsed.value) return { ok: false, error: parsed.error };
+            const amountUnits = parsed.value;
+
+            /*
             let amountUnits: bigint;
             try {
                 amountUnits = ethers.parseUnits(amount, 6);
             } catch (e) {
                 return { ok: false, error: "Invalid amount format" };
             }
+            */
 
             if (amountUnits <= 0n) return { ok: false, error: "Amount must be positive" };
 
